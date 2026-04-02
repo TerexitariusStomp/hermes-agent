@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import logging
 import urllib.request
 import urllib.error
 from difflib import get_close_matches
@@ -687,7 +688,6 @@ def _fetch_anthropic_models(timeout: float = 5.0) -> Optional[list[str]]:
                 m,                    # alphabetical within tier
             ))
     except Exception as e:
-        import logging
         logging.getLogger(__name__).debug("Failed to fetch Anthropic models: %s", e)
         return None
 

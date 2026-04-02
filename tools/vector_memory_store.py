@@ -10,6 +10,7 @@ demotion deletes from curated, leaving archive intact.
 import json
 import os
 import uuid
+import logging
 import httpx
 from datetime import datetime
 from typing import List, Dict, Any, Optional
@@ -197,7 +198,36 @@ class QdrantProvider(BaseVectorProvider):
         api_key = os.getenv("QDRANT_API_KEY")
         if not url or not api_key:
             raise ValueError("QDRANT_URL and QDRANT_API_KEY must be set")
+        # Suppress noisy client compatibility warning; we do our own reachability check.
+        import warnings
+        warnings.filterwarnings(
+            "ignore",
+            message=r"Failed to obtain server version.*",
+            category=UserWarning,
+            module=r"qdrant_client.*",
+        )
+        self._verify_connection(url, api_key)
         self.client = QdrantClient(url=url, api_key=api_key, timeout=30)
+
+    @staticmethod
+    def _verify_connection(url: str, api_key: str) -> None:
+        health_url = f"{url.rstrip('/')}/collections"
+        headers = {"api-key": api_key}
+        try:
+            with httpx.Client(timeout=10.0) as client:
+                resp = client.get(health_url, headers=headers)
+        except Exception as e:
+            raise RuntimeError(
+                f"Qdrant is unreachable at {health_url}. Check network, URL, and firewall."
+            ) from e
+        if resp.status_code == 401:
+            raise RuntimeError(
+                "Qdrant API key was rejected (401). Verify QDRANT_API_KEY."
+            )
+        if resp.status_code >= 400:
+            raise RuntimeError(
+                f"Qdrant reachability check failed: HTTP {resp.status_code}."
+            )
 
     def ensure_collection(self, vector_size: int):
         try:
@@ -407,7 +437,6 @@ class VectorMemoryStore:
             for e in user_entries:
                 self._entry_meta[e["entry_id"]] = e
         except Exception as e:
-            import logging
             logging.warning(f"Failed to load curated memories from cloud: {e}")
         # Migration: if curated is empty and local files exist, migrate them to cloud
         if not self._entry_meta:
@@ -453,7 +482,6 @@ class VectorMemoryStore:
                     self._enforce_limit("memory")
                     self._enforce_limit("user")
             except Exception as e:
-                import logging
                 logging.warning(f"Migration from local files failed: {e}")
         self._refresh_snapshot()
 
@@ -578,7 +606,6 @@ class VectorMemoryStore:
             self.archive_db.delete_by_ids([entry_id])
             self.curated_db.delete_by_ids([entry_id])
         except Exception as e:
-            import logging
             logging.warning(f"Failed to delete entry {entry_id} from cloud: {e}")
         # Remove from in-memory list
         del entries[idx_to_remove]
@@ -621,7 +648,6 @@ class VectorMemoryStore:
             try:
                 self.curated_db.delete_by_ids([eid])
             except Exception as e:
-                import logging
                 logging.warning(f"Failed to demote entry {eid} from curated: {e}")
             # Remove from in-memory list
             del entries[idx]
@@ -726,10 +752,8 @@ def create_vector_memory_store(config: Optional[Dict] = None) -> Optional[Vector
         )
         return VectorMemoryStore(vm_config)
     except ImportError as e:
-        import logging
         logging.warning(f"Vector memory dependencies missing: {e}. Install with 'pip install \"hermes-agent[vector-memory]\"'")
         return None
     except Exception as e:
-        import logging
         logging.warning(f"Failed to initialize vector memory store: {e}")
         return None

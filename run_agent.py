@@ -1069,7 +1069,6 @@ class AIAgent:
                             self._memory_store = create_vector_memory_store(vec_mem_config)
                         except ImportError as e:
                             self._memory_store = None
-                            import logging
                             logging.warning(f"Vector memory dependencies missing: {e}. Falling back to file-based memory.")
                     if self._memory_store is None:
                         from tools.memory_tool import MemoryStore
@@ -1079,7 +1078,6 @@ class AIAgent:
                         )
                     self._memory_store.load_from_disk()
             except Exception as e:
-                import logging
                 logging.debug(f"Memory init failed: {e}")
                 pass  # Memory is optional -- don't break agent init
         
