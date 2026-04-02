@@ -37,6 +37,38 @@ try:
 except ImportError:
     HAS_PINECONE = False
 
+try:
+    import upstash_vector
+    HAS_UPSTASH_REDIS = True
+except ImportError:
+    HAS_UPSTASH_REDIS = False
+
+try:
+    from neo4j import GraphDatabase
+    HAS_NEO4J = True
+except ImportError:
+    HAS_NEO4J = False
+
+try:
+    import psycopg2
+    import psycopg2.extras
+    HAS_NEON = True
+except ImportError:
+    HAS_NEON = False
+
+try:
+    import supabase
+    HAS_SUPABASE = True
+except ImportError:
+    HAS_SUPABASE = False
+
+try:
+    import boto3
+    import botocore
+    HAS_BOTO3 = True
+except ImportError:
+    HAS_BOTO3 = False
+
 
 # =============================================================================
 # Configuration
@@ -292,6 +324,53 @@ class QdrantProvider(BaseVectorProvider):
         return all_points
 
 
+class UpstashProvider(BaseVectorProvider):
+    """Upstash Vector -- serverless vector store with REST API.
+    Use case: low-latency semantic search, agent caching, edge-compatible lookups."""
+
+    def __init__(self, config: VectorMemoryConfig, collection_name: str):
+        super().__init__(config, collection_name)
+        if not HAS_UPSTASH_REDIS:
+            raise ImportError("upstash-vector not installed")
+        url = os.getenv("UPSTASH_VECTOR_URL")
+        token = os.getenv("UPSTASH_VECTOR_TOKEN")
+        if not url or not token:
+            raise ValueError("UPSTASH_VECTOR_URL and UPSTASH_VECTOR_TOKEN must be set")
+        self.client = upstash_vector.Index(url=url, token=token)
+
+    def ensure_collection(self, vector_size: int):
+        # Upstash indexes are serverless; no explicit collection creation needed
+        pass
+
+    def upsert(self, ids, vectors, payloads):
+        self.client.upsert(vectors=[
+            {"id": i, "vector": v, "metadata": p}
+            for i, v, p in zip(ids, vectors, payloads)
+        ])
+
+    def search(self, vector, filter, top_k):
+        pine_filter = filter or {}
+        results = self.client.query(vector=vector, top_k=top_k, include_metadata=True, filter=pine_filter)
+        return [
+            {
+                "id": getattr(m, "id", ""),
+                "score": getattr(m, "score", 0),
+                "payload": getattr(m, "metadata", {}) or {},
+            }
+            for m in results
+        ]
+
+    def delete(self, filter):
+        self.client.delete(filter=filter)
+
+    def delete_by_ids(self, ids):
+        self.client.delete(ids=ids)
+
+    def scroll_all(self, filter=None, batch_size=100):
+        dummy_vec = [0.0] * EmbeddingService(VectorMemoryConfig()).get_vector_size()
+        return self.search(dummy_vec, filter, 10000)
+
+
 class PineconeProvider(BaseVectorProvider):
     def __init__(self, config: VectorMemoryConfig, collection_name: str):
         super().__init__(config, collection_name)
@@ -352,6 +431,292 @@ class PineconeProvider(BaseVectorProvider):
 
 
 # =============================================================================
+# Neo4j Provider -- Graph-based memory/knowledge
+# =============================================================================
+
+class Neo4JProvider(BaseVectorProvider):
+    """Neo4j AuraDB -- graph database with vector indexing.
+    Use case: knowledge graphs, entity relationships, agent reasoning chains."""
+
+    def __init__(self, config: VectorMemoryConfig, collection_name: str):
+        super().__init__(config, collection_name)
+        if not HAS_NEO4J:
+            raise ImportError("neo4j not installed")
+        uri = os.getenv("NEO4J_URI")
+        user = os.getenv("NEO4J_USER") or "neo4j"
+        password = os.getenv("NEO4J_PASSWORD") or os.getenv("NEO4J_API_SECRET")
+        if not uri or not password:
+            raise ValueError("NEO4J_URI and NEO4J_PASSWORD (or NEO4J_API_SECRET) must be set")
+        self.driver = GraphDatabase.driver(uri, auth=(user, password))
+
+    def ensure_collection(self, vector_size: int):
+        with self.driver.session() as session:
+            session.run(
+                "CREATE INDEX IF NOT EXISTS vector_idx FOR (n:Memory) ON n.embedding",
+            )
+            session.run(
+                "CREATE CONSTRAINT unique_entry_id IF NOT EXISTS FOR (n:Memory) REQUIRE n.entry_id IS UNIQUE",
+            )
+
+    def upsert(self, ids, vectors, payloads):
+        with self.driver.session() as session:
+            for pid, vec, pay in zip(ids, vectors, payloads):
+                pay["_embedding"] = vec
+                session.run(
+                    "MERGE (n:Memory {entry_id: $eid}) SET n += $props",
+                    eid=pid, props=pay,
+                )
+
+    def search(self, vector, filter, top_k):
+        with self.driver.session() as session:
+            results = session.run(
+                "MATCH (n:Memory) "
+                "WHERE n.embedding IS NOT NULL "
+                "WITH vector.similarity.cosine(n.embedding, $vec) AS score, n "
+                "WHERE score > 0.0 "
+                "RETURN n.entry_id AS id, score, properties(n) AS payload "
+                "ORDER BY score DESC LIMIT $k",
+                vec=vector, k=top_k,
+            )
+            out = []
+            for r in results:
+                payload = dict(r["payload"])
+                payload.pop("_embedding", None)
+                out.append({"id": r["id"], "score": r["score"], "payload": payload})
+            return out
+
+    def delete(self, filter):
+        if "entry_id" in filter:
+            with self.driver.session() as session:
+                session.run("MATCH (n:Memory {entry_id: $eid}) DELETE n", eid=filter["entry_id"])
+
+    def delete_by_ids(self, ids):
+        with self.driver.session() as session:
+            session.run("MATCH (n:Memory) WHERE n.entry_id IN $ids DELETE n", ids=ids)
+
+    def scroll_all(self, filter=None, batch_size=100):
+        with self.driver.session() as session:
+            results = session.run("MATCH (n:Memory) RETURN n.entry_id AS id, properties(n) AS payload")
+            out = []
+            for r in results:
+                payload = dict(r["payload"])
+                payload.pop("_embedding", None)
+                out.append({"id": r["id"], "payload": payload})
+            return out
+
+    def close(self):
+        self.driver.close()
+
+
+# =============================================================================
+# Postgres Provider with pgvector (Neon Serverless Postgres)
+# =============================================================================
+
+class PostgresProvider(BaseVectorProvider):
+    """Postgres with pgvector extension (Neon Serverless or Supabase hosted).
+    Use case: structured data, relational memory, concurrent SQL access."""
+
+    def __init__(self, config: VectorMemoryConfig, collection_name: str, db_url_key: str = "DATABASE_URL"):
+        super().__init__(config, collection_name)
+        if not HAS_NEON:
+            raise ImportError("psycopg2 not installed. pip install psycopg2-binary")
+        db_url = os.getenv(db_url_key)
+        if not db_url:
+            raise ValueError(f"{db_url_key} must be set in environment")
+        self.db_url = db_url
+        self.table = collection_name.replace("-", "_").lower()
+        self._conn = None
+        self._ensure_connection()
+
+    def _ensure_connection(self):
+        if self._conn is None or self._conn.closed:
+            self._conn = psycopg2.connect(self.db_url)
+
+    def ensure_collection(self, vector_size: int):
+        self._ensure_connection()
+        with self._conn.cursor() as cur:
+            cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
+            cur.execute(
+                f"CREATE TABLE IF NOT EXISTS {self.table} ("
+                f"entry_id TEXT PRIMARY KEY, content TEXT, target TEXT, "
+                f"timestamp TEXT, char_count INTEGER, embedding vector({vector_size}), "
+                f"metadata JSONB);"
+            )
+            cur.execute(
+                f"CREATE INDEX IF NOT EXISTS {self.table}_idx "
+                f"ON {self.table} USING hnsw (embedding vector_cosine_ops);"
+            )
+            self._conn.commit()
+
+    def upsert(self, ids, vectors, payloads):
+        self._ensure_connection()
+        with self._conn.cursor() as cur:
+            for pid, vec, pay in zip(ids, vectors, payloads):
+                cur.execute(
+                    f"INSERT INTO {self.table} (entry_id, content, target, timestamp, char_count, embedding, metadata) "
+                    f"VALUES (%s, %s, %s, %s, %s, %s, %s) "
+                    f"ON CONFLICT (entry_id) DO UPDATE SET "
+                    f"content=EXCLUDED.content, target=EXCLUDED.target, "
+                    f"timestamp=EXCLUDED.timestamp, char_count=EXCLUDED.char_count, "
+                    f"embedding=EXCLUDED.embedding, metadata=EXCLUDED.metadata",
+                    (pid, pay.get("content", ""), pay.get("target", ""),
+                     pay.get("timestamp", ""), pay.get("char_count", 0),
+                     vec, json.dumps(pay)),
+                )
+            self._conn.commit()
+
+    def search(self, vector, filter, top_k):
+        self._ensure_connection()
+        params: list = [vector, vector]
+        where = ""
+        if filter and "target" in filter:
+            where = "WHERE target = %s"
+            params = [vector, filter["target"], vector]
+        with self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                f"SELECT entry_id, content, target, timestamp, char_count, metadata, "
+                f"1 - (embedding <-> %s::vector) AS score "
+                f"FROM {self.table} {where} "
+                f"ORDER BY embedding <-> %s::vector "
+                f"LIMIT {top_k}",
+                [*params],
+            )
+            out = []
+            for r in cur.fetchall():
+                payload = {
+                    "content": r["content"], "target": r["target"],
+                    "timestamp": r["timestamp"], "char_count": r["char_count"],
+                    **(r["metadata"] or {}),
+                }
+                out.append({"id": r["entry_id"], "score": r["score"], "payload": payload})
+            return out
+
+    def delete(self, filter):
+        self._ensure_connection()
+        with self._conn.cursor() as cur:
+            if "entry_id" in filter:
+                cur.execute(f"DELETE FROM {self.table} WHERE entry_id = %s", (filter["entry_id"],))
+            elif "target" in filter:
+                cur.execute(f"DELETE FROM {self.table} WHERE target = %s", (filter["target"],))
+            self._conn.commit()
+
+    def delete_by_ids(self, ids):
+        self._ensure_connection()
+        with self._conn.cursor() as cur:
+            cur.execute(f"DELETE FROM {self.table} WHERE entry_id = ANY(%s)", (ids,))
+            self._conn.commit()
+
+    def scroll_all(self, filter=None, batch_size=100):
+        self._ensure_connection()
+        with self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            if filter and "target" in filter:
+                cur.execute(f"SELECT entry_id, content, target, timestamp, char_count, metadata FROM {self.table} WHERE target = %s", (filter["target"],))
+            else:
+                cur.execute(f"SELECT entry_id, content, target, timestamp, char_count, metadata FROM {self.table}")
+            out = []
+            for r in cur.fetchall():
+                out.append({
+                    "id": r["entry_id"],
+                    "payload": {
+                        "content": r["content"], "target": r["target"],
+                        "timestamp": r["timestamp"], "char_count": r["char_count"],
+                        **(r["metadata"] or {}),
+                    },
+                })
+            return out
+
+    def close(self):
+        if self._conn and not self._conn.closed:
+            self._conn.close()
+
+
+# =============================================================================
+# Supabase Provider (BaaS with pgvector + realtime)
+# =============================================================================
+
+class SupabaseProvider(PostgresProvider):
+    """Supabase hosted Postgres -- full-stack BaaS with pgvector, auth, realtime.
+    Reuses the PostgresProvider since Supabase DB is standard Postgres + pgvector."""
+
+    def __init__(self, config: VectorMemoryConfig, collection_name: str):
+        db_url = os.getenv("SUPABASE_DB_URL")
+        if not db_url:
+            raise ValueError("SUPABASE_DB_URL must be set (from Supabase Settings > Database)")
+        super().__init__(config, collection_name, db_url_key="SUPABASE_DB_URL")
+
+
+# =============================================================================
+# Backblaze B2 Provider -- Object storage for cold archive/backup
+# =============================================================================
+
+class B2ArchiveProvider(BaseVectorProvider):
+    """Backblaze B2 for cold storage / disaster recovery backup.
+    Use case: long-term archive of memory entries, large file backup.
+    Not for semantic search -- use as write-only backup sink."""
+
+    def __init__(self, config: VectorMemoryConfig, collection_name: str):
+        super().__init__(config, collection_name)
+        if not HAS_BOTO3:
+            raise ImportError("boto3 not installed. pip install boto3")
+        key_id = os.getenv("BACKBLAZE_KEY_ID") or os.getenv("B2_KEY_ID")
+        key = os.getenv("BACKBLAZE_APPLICATION_KEY")
+        endpoint = os.getenv("BACKBLAZE_ENDPOINT", "https://s3.us-west-000.backblazeb2.com")
+        bucket = os.getenv("BACKBLAZE_BUCKET", "hermes-memory")
+        if not key_id or not key:
+            raise ValueError("BACKBLAZE_KEY_ID and BACKBLAZE_APPLICATION_KEY must be set")
+        self.bucket = bucket
+        self.s3 = boto3.client(
+            "s3", endpoint_url=endpoint,
+            aws_access_key_id=key_id, aws_secret_access_key=key,
+        )
+        try:
+            self.s3.head_bucket(Bucket=bucket)
+        except Exception as e:
+            raise RuntimeError(f"Cannot access B2 bucket '{bucket}': {e}")
+
+    def _key(self, entry_id: str) -> str:
+        return f"{self.collection_name}/{entry_id}.json"
+
+    def ensure_collection(self, vector_size: int):
+        pass  # B2 is object storage -- no schema
+
+    def upsert(self, ids, vectors, payloads):
+        for pid, vec, pay in zip(ids, vectors, payloads):
+            data = {"entry_id": pid, "vector": vec, "payload": pay, "backed_at": datetime.utcnow().isoformat() + "Z"}
+            self.s3.put_object(
+                Bucket=self.bucket, Key=self._key(pid),
+                Body=json.dumps(data), ContentType="application/json",
+            )
+
+    def search(self, vector, filter, top_k):
+        # Cold archive -- no semantic search, just list
+        results = []
+        prefix = f"{self.collection_name}/"
+        resp = self.s3.list_objects_v2(Bucket=self.bucket, Prefix=prefix, MaxKeys=1000)
+        for obj in resp.get("Contents", []):
+            if obj["Key"].endswith(".json"):
+                data = json.loads(self.s3.get_object(Bucket=self.bucket, Key=obj["Key"])["Body"].read())
+                payload = data.get("payload", {})
+                if filter and payload.get("target") != filter.get("target"):
+                    continue
+                results.append({"id": data.get("entry_id", obj["Key"]), "score": 0.0, "payload": payload})
+                if len(results) >= top_k:
+                    break
+        return results
+
+    def delete(self, filter):
+        if "entry_id" in filter:
+            self.s3.delete_object(Bucket=self.bucket, Key=self._key(filter["entry_id"]))
+
+    def delete_by_ids(self, ids):
+        for eid in ids:
+            self.s3.delete_object(Bucket=self.bucket, Key=self._key(eid))
+
+    def scroll_all(self, filter=None, batch_size=100):
+        return self.search([], filter, 10000)
+
+
+# =============================================================================
 # Vector Memory Store (two-collection design)
 # =============================================================================
 
@@ -383,6 +748,14 @@ class VectorMemoryStore:
                 provider_name = "qdrant"
             elif os.getenv("PINECONE_API_KEY"):
                 provider_name = "pinecone"
+            elif os.getenv("UPSTASH_VECTOR_URL") and os.getenv("UPSTASH_VECTOR_TOKEN"):
+                provider_name = "upstash"
+            elif os.getenv("NEON_DB_URL"):
+                provider_name = "neon"
+            elif os.getenv("SUPABASE_DB_URL"):
+                provider_name = "supabase"
+            elif os.getenv("NEO4J_URI"):
+                provider_name = "neo4j"
             elif os.getenv("ZILLIZ_API_KEY"):
                 provider_name = "zilliz"
             else:
@@ -395,6 +768,26 @@ class VectorMemoryStore:
             if not HAS_PINECONE:
                 raise ImportError("pinecone-client not installed. pip install 'hermes-agent[vector-memory]'")
             return PineconeProvider(self.config, collection_name)
+        elif provider_name == "upstash":
+            if not HAS_UPSTASH_REDIS:
+                raise ImportError("upstash-vector not installed. pip install upstash-vector")
+            return UpstashProvider(self.config, collection_name)
+        elif provider_name == "neon":
+            if not HAS_NEON:
+                raise ImportError("psycopg2-binary not installed. pip install psycopg2-binary")
+            return PostgresProvider(self.config, collection_name, db_url_key="NEON_DB_URL")
+        elif provider_name == "supabase":
+            if not HAS_NEON:
+                raise ImportError("psycopg2-binary not installed. pip install psycopg2-binary")
+            return SupabaseProvider(self.config, collection_name)
+        elif provider_name == "neo4j":
+            if not HAS_NEO4J:
+                raise ImportError("neo4j not installed. pip install neo4j")
+            return Neo4JProvider(self.config, collection_name)
+        elif provider_name == "b2":
+            if not HAS_BOTO3:
+                raise ImportError("boto3 not installed. pip install boto3")
+            return B2ArchiveProvider(self.config, collection_name)
         elif provider_name == "zilliz":
             raise NotImplementedError("Zilliz provider not implemented")
         else:
