@@ -1056,18 +1056,31 @@ class AIAgent:
         if not skip_memory:
             try:
                 mem_config = _agent_cfg.get("memory", {})
+                vec_mem_config = _agent_cfg.get("vector_memory", {})
                 self._memory_enabled = mem_config.get("memory_enabled", False)
                 self._user_profile_enabled = mem_config.get("user_profile_enabled", False)
                 self._memory_nudge_interval = int(mem_config.get("nudge_interval", 10))
                 self._memory_flush_min_turns = int(mem_config.get("flush_min_turns", 6))
                 if self._memory_enabled or self._user_profile_enabled:
-                    from tools.memory_tool import MemoryStore
-                    self._memory_store = MemoryStore(
-                        memory_char_limit=mem_config.get("memory_char_limit", 2200),
-                        user_char_limit=mem_config.get("user_char_limit", 1375),
-                    )
+                    # Try to use cloud vector memory if enabled and available
+                    if vec_mem_config.get("enabled", False):
+                        try:
+                            from tools.vector_memory_store import create_vector_memory_store
+                            self._memory_store = create_vector_memory_store(vec_mem_config)
+                        except ImportError as e:
+                            self._memory_store = None
+                            import logging
+                            logging.warning(f"Vector memory dependencies missing: {e}. Falling back to file-based memory.")
+                    if self._memory_store is None:
+                        from tools.memory_tool import MemoryStore
+                        self._memory_store = MemoryStore(
+                            memory_char_limit=mem_config.get("memory_char_limit", 2200),
+                            user_char_limit=mem_config.get("user_char_limit", 1375),
+                        )
                     self._memory_store.load_from_disk()
-            except Exception:
+            except Exception as e:
+                import logging
+                logging.debug(f"Memory init failed: {e}")
                 pass  # Memory is optional -- don't break agent init
         
         # Honcho AI-native memory (cross-session user modeling)

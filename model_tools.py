@@ -150,6 +150,7 @@ def _discover_tools():
         "tools.tts_tool",
         "tools.todo_tool",
         "tools.memory_tool",
+        "tools.semantic_memory_search",  # cloud vector memory search
         "tools.session_search_tool",
         "tools.clarify_tool",
         "tools.code_execution_tool",
