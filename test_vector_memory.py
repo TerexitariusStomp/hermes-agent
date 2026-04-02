@@ -58,28 +58,63 @@ def test_vector_memory_store_init():
         return None  # skip
 
 def test_memory_operations():
-    """Test add, search operations if cloud is available."""
+    """Test store, search, routing operations if cloud is available."""
     from tools.vector_memory_store import VectorMemoryStore, VectorMemoryConfig
-    print("Testing memory operations (add + search)...")
+    print("Testing memory operations (store + search + routing)...")
     config = VectorMemoryConfig(provider="auto")
     try:
         store = VectorMemoryStore(config)
-        # Add a test entry
-        result = store.add("memory", "Test entry: Hermes vector memory works!")
-        if not result.get("success"):
-            print(f"  Add failed: {result.get('error')}")
+
+        # Show which providers are active
+        info = store.get_provider_info()
+        print(f"  Active providers: {info}")
+
+        # Test 1: Store a memory entry (should route to qdrant)
+        entry_id = store.store(
+            content="Test entry: Hermes vector memory routing works!",
+            target="memory",
+            entry_type="memory",
+        )
+        if not entry_id:
+            print("  Store failed — no provider available")
             return False
-        entry_id = result.get("entry_id")  # not in our return; we'd need to capture it
-        print(f"  Added test entry. Curated count: {result.get('entry_count')}")
-        # Search for it
+        print(f"  Stored entry: {entry_id}")
+
+        # Test 2: Store an entity (should route to neo4j)
+        entity_id = store.store(
+            content="Qdrant is a vector database for semantic search",
+            target="memory",
+            entry_type="entity",
+        )
+        print(f"  Stored entity: {entity_id}")
+
+        # Test 3: Store a session (should route to upstash)
+        session_id = store.store(
+            content="User session started with context about GPU hotplug",
+            target="memory",
+            entry_type="session",
+        )
+        print(f"  Stored session: {session_id}")
+
+        # Test 4: Check routing stats
+        stats = store.get_router_stats()
+        print(f"  Router stats: {stats}")
+
+        # Test 5: Search for entries
         search_results = store.search("vector memory", top_k=5, target="memory")
         print(f"  Search returned {len(search_results)} results")
         if search_results:
             best = search_results[0]
-            print(f"  Top match: score={best['score']:.4f}, content={best['content'][:50]}...")
+            print(f"  Top match: score={best.get('score', 0):.4f}, content={best.get('content', '')[:60]}...")
+            print(f"  Source: {best.get('_source', 'unknown')}")
+
+        # Test 6: Router classification test
+        router = store.router
+        for etype in ["memory", "entity", "session", "archive", "structured", "backup"]:
+            target = router.route_type(etype)
+            print(f"  Route '{etype}' -> {target}")
+
         print("  Memory operations test PASSED")
-        # Cleanup: remove the test entry (we need to find its ID from search or _entry_meta)
-        # For now we leave it; it's fine.
         return True
     except Exception as e:
         print(f"  Memory operations test FAILED: {e}")

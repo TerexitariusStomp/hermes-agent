@@ -63,11 +63,10 @@ def semantic_memory_search_tool(
 
         # Create a VectorMemoryStore instance (read-only)
         config = VectorMemoryConfig(
-            provider=vec_mem_cfg.get("provider", "auto"),
-            embedding_model=vec_mem_cfg.get("embedding_model", "openai/text-embedding-ada-002"),
-            embedding_base_url=vec_mem_cfg.get("embedding_base_url"),
+            embedding_model=vec_mem_cfg.get("embedding_model", "nvidia/llama-nemotron-embed-vl-1b-v2:free"),
+            embedding_base_url=vec_mem_cfg.get("embedding_base_url", "https://openrouter.ai/api/v1"),
             embedding_api_key_env=vec_mem_cfg.get("embedding_api_key_env", "OPENROUTER_API_KEY"),
-            collection_name=vec_mem_cfg.get("collection_name", "hermes_memory"),
+            collection_base_name=vec_mem_cfg.get("collection_base_name", "hermes_memory"),
             memory_char_limit=vec_mem_cfg.get("memory_char_limit", 2200),
             user_char_limit=vec_mem_cfg.get("user_char_limit", 1375),
         )
