@@ -1047,6 +1047,7 @@ class AIAgent:
 
         # Persistent memory (MEMORY.md + USER.md) -- loaded from disk
         self._memory_store = None
+        self._vector_memory_store = None
         self._memory_enabled = False
         self._user_profile_enabled = False
         self._memory_nudge_interval = 10
@@ -1062,20 +1063,21 @@ class AIAgent:
                 self._memory_nudge_interval = int(mem_config.get("nudge_interval", 10))
                 self._memory_flush_min_turns = int(mem_config.get("flush_min_turns", 6))
                 if self._memory_enabled or self._user_profile_enabled:
-                    # Try to use cloud vector memory if enabled and available
+                    # Vector memory is optional; keep file-based memory for curated prompt injection + tool use.
                     if vec_mem_config.get("enabled", False):
                         try:
                             from tools.vector_memory_store import create_vector_memory_store
-                            self._memory_store = create_vector_memory_store(vec_mem_config)
+                            self._vector_memory_store = create_vector_memory_store(vec_mem_config)
                         except ImportError as e:
-                            self._memory_store = None
-                            logging.warning(f"Vector memory dependencies missing: {e}. Falling back to file-based memory.")
-                    if self._memory_store is None:
-                        from tools.memory_tool import MemoryStore
-                        self._memory_store = MemoryStore(
-                            memory_char_limit=mem_config.get("memory_char_limit", 2200),
-                            user_char_limit=mem_config.get("user_char_limit", 1375),
-                        )
+                            self._vector_memory_store = None
+                            logging.warning(
+                                f"Vector memory dependencies missing: {e}. Continuing with file-based memory only."
+                            )
+                    from tools.memory_tool import MemoryStore
+                    self._memory_store = MemoryStore(
+                        memory_char_limit=mem_config.get("memory_char_limit", 2200),
+                        user_char_limit=mem_config.get("user_char_limit", 1375),
+                    )
                     self._memory_store.load_from_disk()
             except Exception as e:
                 logging.debug(f"Memory init failed: {e}")
@@ -2536,6 +2538,42 @@ class AIAgent:
         except Exception as e:
             logger.debug("Honcho user observation failed: %s", e)
             return json.dumps({"success": False, "error": f"Honcho save failed: {e}"})
+
+    def _archive_memory_to_vector(
+        self,
+        *,
+        action: str,
+        target: str,
+        content: str,
+        result_json: str,
+    ) -> None:
+        """Archive successful memory tool writes to vector memory when enabled."""
+        if not self._vector_memory_store:
+            return
+        if action not in ("add", "replace"):
+            return
+        if not content or not content.strip():
+            return
+        try:
+            parsed = json.loads(result_json)
+        except Exception:
+            return
+        if not isinstance(parsed, dict) or not parsed.get("success"):
+            return
+        try:
+            entry_type = target if target in ("memory", "user") else "memory"
+            self._vector_memory_store.store(
+                content=content.strip(),
+                target=entry_type,
+                entry_type=entry_type,
+                metadata={
+                    "source": "memory_tool",
+                    "action": action,
+                    "session_id": self.session_id,
+                },
+            )
+        except Exception as e:
+            logger.debug("Vector memory archive failed (non-fatal): %s", e)
 
     def _honcho_sync(self, user_content: str, assistant_content: str) -> None:
         """Sync the user/assistant message pair to Honcho."""
@@ -5489,6 +5527,12 @@ class AIAgent:
                             old_text=args.get("old_text"),
                             store=self._memory_store,
                         )
+                        self._archive_memory_to_vector(
+                            action=args.get("action"),
+                            target=flush_target,
+                            content=args.get("content"),
+                            result_json=result,
+                        )
                         if self._honcho and flush_target == "user" and args.get("action") == "add":
                             self._honcho_save_user_observation(args.get("content", ""))
                         if not self.quiet_mode:
@@ -5641,6 +5685,12 @@ class AIAgent:
                 content=function_args.get("content"),
                 old_text=function_args.get("old_text"),
                 store=self._memory_store,
+            )
+            self._archive_memory_to_vector(
+                action=function_args.get("action"),
+                target=target,
+                content=function_args.get("content"),
+                result_json=result,
             )
             # Also send user observations to Honcho when active
             if self._honcho and target == "user" and function_args.get("action") == "add":
@@ -5991,6 +6041,12 @@ class AIAgent:
                     content=function_args.get("content"),
                     old_text=function_args.get("old_text"),
                     store=self._memory_store,
+                )
+                self._archive_memory_to_vector(
+                    action=function_args.get("action"),
+                    target=target,
+                    content=function_args.get("content"),
+                    result_json=function_result,
                 )
                 # Also send user observations to Honcho when active
                 if self._honcho and target == "user" and function_args.get("action") == "add":
