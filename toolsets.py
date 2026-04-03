@@ -167,8 +167,8 @@ TOOLSETS = {
     },
     
     "memory": {
-        "description": "Persistent memory across sessions (personal notes + user profile)",
-        "tools": ["memory"],
+        "description": "Persistent memory across sessions (personal notes + user profile + vector memory recall)",
+        "tools": ["memory", "recall"],
         "includes": []
     },
     

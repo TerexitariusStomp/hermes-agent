@@ -330,6 +330,66 @@ def check_context_db():
         log_improvement("context_db_check", f"ERROR: {e}", "fail")
         return False
 
+
+
+def check_session_health():
+    """Check session file health from state.db (724-office self_check_tool.py pattern)."""
+    try:
+        import sqlite3
+        db_file = os.path.join(HOMEDIR, "state.db")
+        if not os.path.exists(db_file):
+            log_improvement("session_health", "state.db not found")
+            return True
+        
+        conn = sqlite3.connect(db_file)
+        c = conn.cursor()
+        
+        # Count sessions
+        c.execute("SELECT COUNT(*) FROM sessions")
+        session_count = c.fetchone()[0]
+        
+        # Count messages
+        c.execute("SELECT COUNT(*) FROM messages")
+        msg_count = c.fetchone()[0]
+        
+        # Check for sessions with errors (role not system/user/assistant/tool)
+        c.execute("SELECT COUNT(*) FROM messages WHERE role NOT IN ('system', 'user', 'assistant', 'tool')")
+        bad_role_count = c.fetchone()[0]
+        
+        # Check for orphan tool messages (simplified check)
+        c.execute("SELECT COUNT(*) FROM messages WHERE role='tool'")
+        tool_msg_count = c.fetchone()[0]
+        
+        conn.close()
+        
+        log_improvement("session_health",
+                       f"{session_count} sessions, {msg_count} messages, "
+                       f"{bad_role_count} bad-role msgs, {tool_msg_count} tool msgs")
+        
+        return bad_role_count == 0
+    except Exception as e:
+        log_improvement("session_health", f"ERROR: {e}", "fail")
+        return False
+
+
+def check_memory_disk_usage():
+    """Check memory file sizes and disk usage patterns (724-office pattern)."""
+    try:
+        mem_path = os.path.join(HOMEDIR, "memories", "MEMORY.md")
+        if os.path.exists(mem_path):
+            size_kb = os.path.getsize(mem_path) / 1024
+            import time
+            mtime = time.time() - os.path.getmtime(mem_path)
+            hours = int(mtime / 3600)
+            log_improvement("memory_file", 
+                           f"MEMORY.md: {size_kb:.1f}KB, last updated {hours}h ago")
+        else:
+            log_improvement("memory_file", "MEMORY.md not found", "skip")
+        return True
+    except Exception as e:
+        log_improvement("memory_file", f"ERROR: {e}", "fail")
+        return False
+
 def main():
     print("=" * 60)
     print(f"HERMES AUTO-IMPROVEMENT CYCLE")
@@ -343,6 +403,8 @@ def main():
         ("Portkey Gateway", check_portkey),
         ("AutoHarness Analysis", check_autoharness),
         ("Context DB", check_context_db),
+        ("Session Health", check_session_health),
+        ("Memory File", check_memory_disk_usage),
         ("Skill Updates", update_skills_if_needed),
     ]
     

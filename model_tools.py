@@ -151,6 +151,7 @@ def _discover_tools():
         "tools.todo_tool",
         "tools.memory_tool",
         "tools.semantic_memory_search",  # cloud vector memory search
+        "tools.recall_tool",  # semantic recall from vector memory (724-office pattern)
         "tools.session_search_tool",
         "tools.clarify_tool",
         "tools.code_execution_tool",
