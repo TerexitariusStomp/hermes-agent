@@ -12,6 +12,8 @@ import logging
 from datetime import datetime, timezone
 from typing import List, Dict, Optional
 
+from tools.registry import registry
+
 logger = logging.getLogger("hermes-memory-compress")
 
 HERMES_HOME = os.path.expanduser("~/.hermes")
@@ -130,3 +132,68 @@ def retrieve(query, top_k=5):
 
 # Auto-init
 init({"enabled": True, "embedding_api": {"api_base": "https://openrouter.ai/api/v1", "api_key_env": "OPENROUTER_API_KEY"}})
+
+
+def _memory_compress_handler(args, task_id=None):
+    """Handler for the compress_memories LLM tool."""
+    facts = args.get("facts", [])
+    if isinstance(facts, str):
+        try:
+            facts = json.loads(facts)
+        except json.JSONDecodeError:
+            facts = [{"fact": facts}]
+    return json.dumps(deduplicate_and_store(facts))
+
+
+def _memory_search_handler(args, task_id=None):
+    """Handler for the search_compressed_memory LLM tool."""
+    query = args.get("query", "")
+    top_k = args.get("top_k", 5)
+    results = retrieve(query, top_k=top_k)
+    if not results:
+        return json.dumps({"found": 0, "results": []})
+    return json.dumps({"found": len(results), "results": results})
+
+
+registry.register(
+    name="compress_memories",
+    toolset="diagnostics",
+    schema={
+        "name": "compress_memories",
+        "description": "Compress and store extracted memories with deduplication. "
+                       "Each memory should have a 'fact' field (the core fact), optionally 'keywords', "
+                       "'persons', 'timestamp', 'topic'. Duplicates are skipped using cosine similarity.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "facts": {
+                    "type": "array",
+                    "description": "Array of memory objects, each with at least 'fact' (string). "
+                                   "Optional: keywords (array), persons (array), timestamp (string), topic (string).",
+                    "items": {"type": "object"},
+                },
+            },
+            "required": ["facts"],
+        },
+    },
+    handler=_memory_compress_handler,
+)
+
+registry.register(
+    name="search_compressed_memory",
+    toolset="diagnostics",
+    schema={
+        "name": "search_compressed_memory",
+        "description": "Search compressed long-term memories by semantic similarity. "
+                       "Returns most relevant stored facts.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Search query"},
+                "top_k": {"type": "integer", "description": "Number of results (default 5)"},
+            },
+            "required": ["query"],
+        },
+    },
+    handler=_memory_search_handler,
+)

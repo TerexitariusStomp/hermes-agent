@@ -1,8 +1,27 @@
-# HERMES_TOOL_IMPROVEMENTS.md -- Patterns from 724-Office (April 3, 2026)
+# HERMES_TOOL_IMPROVEMENTS.md -- Patterns from 724-Office
 
-Patterns identified from /tmp/724-office/tools.py (26 tools), memory.py, and llm.py.
+## Status as of 2026-04-03 (Cycle 2)
 
-## HIGH Priority
+### ✅ COMPLETED (Cycle 1: 2026-04-03 04:48)
+- `tools/recall_tool.py` — semantic memory retrieval (line 806-813 of 724-office tools.py)
+- `tools/memory_compress.py` — LLM-based compression pipeline (memory.py 3-stage)
+- `tools/self_check_tool.py` — system health diagnostics (tools.py 818-920)
+- `tools/create_tool.py` — runtime tool creation (tools.py 1024-1055)
+- `vector-memory-routing` SKILL.md updated with 3-stage compression pattern
+- `auto_improve.py` enhanced with session health + memory file checks
+
+### ✅ COMPLETED (Cycle 2: 2026-04-03 16:00)
+- `tools/diagnose_tool.py` — session file health diagnostics (tools.py 925-1019)
+  - Detects orphan tool messages, bad session starts, MCP status, error logs
+- `tools/self_check_tool.py` — registered via `registry.register()` (added handler)
+- `tools/create_tool.py` — registered 3 tools: `create_custom_tool`, `list_custom_tools`, `remove_custom_tool`
+- `tools/custom_tools/` — created directory + `__init__.py` for plugin hot-loading
+- `model_tools.py` — added imports for `self_check_tool`, `create_tool`, `memory_compress`, `diagnose_tool`
+  - Fixes orphaned module problem from Cycle 1 (modules existed but were never imported)
+
+### 🔧 REMAINING (from 724-office)
+
+## LOW Priority
 
 ### 1. `self_check` -- System Self-Diagnostic
 **724-Office source**: `tool_self_check` (tools.py lines 818-920)

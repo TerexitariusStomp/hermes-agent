@@ -10,6 +10,8 @@ import subprocess
 import time
 from datetime import datetime, timezone
 
+from tools.registry import registry
+
 HERMES_HOME = os.path.expanduser("~/.hermes")
 
 def run_cmd(cmd, timeout=10):
@@ -124,3 +126,21 @@ def format_report(metrics=None):
 if __name__ == "__main__":
     metrics = collect_health_metrics()
     print(format_report(metrics))
+
+
+registry.register(
+    name="self_check",
+    toolset="diagnostics",
+    schema={
+        "name": "self_check",
+        "description": "System self-check: collect conversation stats, system health (disk, memory), "
+                       "service status, error logs, and recent improvement history. "
+                       "Returns a comprehensive health report in text format.",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+        },
+    },
+    handler=lambda args, **kw: json.dumps(collect_health_metrics(), indent=2),
+)
+

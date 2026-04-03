@@ -12,6 +12,8 @@ import importlib.util
 import logging
 from datetime import datetime, timezone
 
+from tools.registry import registry
+
 logger = logging.getLogger("hermes-create-tool")
 
 CUSTOM_TOOLS_DIR = os.path.expanduser("~/.hermes/hermes-agent/tools/custom_tools/")
@@ -128,5 +130,85 @@ def init_custom_tools():
                         register_tool(attr._tool_name, attr, attr._tool_description)
             except Exception as e:
                 logger.error(f"Failed to load custom tool {tool_name}: {e}")
+
+
+def _create_tool_handler(args, task_id=None):
+    """Handler for the create_custom_tool LLM tool."""
+    name = args.get("name", "")
+    code = args.get("code", "")
+    return json.dumps(create_tool(name, code))
+
+
+def _list_custom_tools_handler(args, task_id=None):
+    """Handler for the list_custom_tools LLM tool."""
+    return json.dumps(list_custom_tools())
+
+
+def _remove_custom_tool_handler(args, task_id=None):
+    """Handler for the remove_custom_tool LLM tool."""
+    name = args.get("name", "")
+    result_path = os.path.join(CUSTOM_TOOLS_DIR, f"{name}.py")
+    if os.path.exists(result_path):
+        os.remove(result_path)
+        if name in _custom_tool_registry:
+            del _custom_tool_registry[name]
+        return json.dumps({"status": "success", "message": f"Removed custom tool {name}"})
+    return json.dumps({"status": "error", "message": f"Tool {name} not found"})
+
+
+registry.register(
+    name="create_custom_tool",
+    toolset="diagnostics",
+    schema={
+        "name": "create_custom_tool",
+        "description": "Create a new custom tool plugin at runtime. Code is saved to the custom_tools/ "
+                       "directory and hot-loaded immediately. Use the tool decorator pattern: "
+                       "'def tool_name(args, ctx): ...'. Includes governance checks for dangerous patterns.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Tool name (used as filename, e.g. 'weather' creates custom_tools/weather.py)",
+                },
+                "code": {
+                    "type": "string",
+                    "description": "Complete Python tool code with function definition. "
+                                   "Cannot use __import__, exec(), eval(), os.system(), subprocess.Popen.",
+                },
+            },
+            "required": ["name", "code"],
+        },
+    },
+    handler=_create_tool_handler,
+)
+
+registry.register(
+    name="list_custom_tools",
+    toolset="diagnostics",
+    schema={
+        "name": "list_custom_tools",
+        "description": "List all registered custom tool plugins.",
+        "parameters": {"type": "object", "properties": {}},
+    },
+    handler=_list_custom_tools_handler,
+)
+
+registry.register(
+    name="remove_custom_tool",
+    toolset="diagnostics",
+    schema={
+        "name": "remove_custom_tool",
+        "description": "Delete a custom tool plugin by name.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Tool name to delete"},
+            },
+            "required": ["name"],
+        },
+    },
+    handler=_remove_custom_tool_handler,
+)
 
 init_custom_tools()
