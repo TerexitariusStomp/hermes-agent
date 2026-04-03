@@ -103,6 +103,11 @@ from agent.trajectory import (
 )
 from utils import atomic_json_write, env_var_enabled
 
+# Extension point lifecycle hooks
+from tools.hooks.hook_manager import HookManager
+from tools.hooks.hook_types import HookContext, HookPoint, HookResult
+from tools.hooks.builtin_hooks import register_builtin_hooks
+
 HONCHO_TOOL_NAMES = {
     "honcho_context",
     "honcho_profile",
@@ -785,6 +790,11 @@ class AIAgent:
         # single tool loop does not repeatedly re-run auxiliary vision on the
         # same image history.
         self._anthropic_image_fallback_cache: Dict[str, str] = {}
+
+        # ── Extension point lifecycle hooks ────────────────────────────
+        self._hook_manager: "HookManager | None" = None
+        self._agent_id: str = session_id or str(uuid.uuid4())[:8]
+        self._setup_hooks()
 
         # Initialize LLM client via centralized provider router.
         # The router handles auth resolution, base URL, headers, and
@@ -5688,6 +5698,48 @@ class AIAgent:
         finally:
             self._executing_tools = False
 
+    def _setup_hooks(self) -> None:
+        """Create HookManager and register all built-in hooks."""
+        try:
+            self._hook_manager = HookManager()
+            register_builtin_hooks(self._hook_manager)
+        except Exception:
+            logger.error("Failed to initialize hook manager", exc_info=True)
+            self._hook_manager = None
+
+    def get_hook_manager(self) -> "HookManager | None":
+        """Return the hook manager for this agent instance."""
+        return self._hook_manager
+
+    def _fire_tool_before(self, tool_name: str, tool_args: dict) -> None:
+        """Fire tool.beforeExecute hook before tool execution."""
+        if not self._hook_manager:
+            return
+        ctx = HookContext(agent_id=self._agent_id, tool_name=tool_name, tool_args=tool_args)
+        try:
+            self._hook_manager.fire_sync(HookPoint.TOOL_BEFORE_EXECUTE, ctx)
+        except Exception:
+            logger.error("Error in before-execute hooks for '%s'", tool_name, exc_info=True)
+
+    def _fire_tool_after(self, tool_name: str, tool_args: dict,
+                        result: str, duration: float, is_error: bool) -> None:
+        """Fire tool.afterExecute or tool.onError hooks after execution."""
+        if not self._hook_manager:
+            return
+        point = HookPoint.TOOL_ON_ERROR if is_error else HookPoint.TOOL_AFTER_EXECUTE
+        ctx = HookContext(
+            agent_id=self._agent_id,
+            tool_name=tool_name,
+            tool_args=tool_args,
+            tool_result=result,
+            tool_duration=duration,
+            tool_error=Exception(result) if is_error else None,
+        )
+        try:
+            self._hook_manager.fire_sync(point, ctx)
+        except Exception:
+            logger.error("Error in after-execute hooks for '%s'", tool_name, exc_info=True)
+
     def _invoke_tool(self, function_name: str, function_args: dict, effective_task_id: str) -> str:
         """Invoke a single tool and return the result string. No display logic.
 
@@ -5854,6 +5906,9 @@ class AIAgent:
 
         def _run_tool(index, tool_call, function_name, function_args):
             """Worker function executed in a thread."""
+            # Fire before-execute lifecycle hooks
+            self._fire_tool_before(function_name, function_args)
+
             start = time.time()
             try:
                 result = self._invoke_tool(function_name, function_args, effective_task_id)
@@ -5862,6 +5917,10 @@ class AIAgent:
                 logger.error("_invoke_tool raised for %s: %s", function_name, tool_error, exc_info=True)
             duration = time.time() - start
             is_error, _ = _detect_tool_failure(function_name, result)
+
+            # Fire after-execute / on-error lifecycle hooks
+            self._fire_tool_after(function_name, function_args, result, duration, is_error)
+
             results[index] = (function_name, function_args, result, duration, is_error)
 
         # Start spinner for CLI mode (skip when TUI handles tool progress)
@@ -6042,6 +6101,9 @@ class AIAgent:
                 except Exception:
                     pass  # never block tool execution
 
+            # Fire before-execute lifecycle hook
+            self._fire_tool_before(function_name, function_args)
+
             tool_start_time = time.time()
 
             if function_name == "todo":
@@ -6183,6 +6245,9 @@ class AIAgent:
             _is_error_result, _ = _detect_tool_failure(function_name, function_result)
             if _is_error_result:
                 logger.warning("Tool %s returned error (%.2fs): %s", function_name, tool_duration, result_preview)
+
+            # Fire after-execute / on-error lifecycle hooks
+            self._fire_tool_after(function_name, function_args, function_result, tool_duration, _is_error_result)
 
             if self.verbose_logging:
                 logging.debug(f"Tool {function_name} completed in {tool_duration:.2f}s")
