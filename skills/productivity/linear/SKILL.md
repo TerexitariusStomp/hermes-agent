@@ -16,6 +16,21 @@ metadata:
 
 Manage Linear issues, projects, and teams directly via the GraphQL API using `curl`. No MCP server, no OAuth flow, no extra dependencies.
 
+## When to Use
+
+**Triggers — load this skill when ANY of these occur:**
+- User mentions **Linear issues, projects, or sprints** (e.g., "create a Linear ticket", "check Linear", "what's in my sprint", "triage Linear issues")
+- **Project management from terminal**: creating bugs, feature requests, tracking work, assigning issues
+- **Status checks**: querying issue details, team backlog, or project progress
+- **Batch operations**: updating multiple issue statuses, adding labels across issues
+- Need to **automate Linear API calls** without installing Linear's CLI or MCP
+- User provides **Linear issue identifiers** (e.g., "ENG-123", "PROD-456") or Linear URLs
+
+**Don't use when:**
+- User wants real-time notifications or webhooks — use Linear's web UI at linear.app
+- User has no `LINEAR_API_KEY` configured — run setup first, then proceed
+- User references GitHub Issues or Jira — use `github-issues` or the appropriate skill instead
+
 ## Setup
 
 1. Get a personal API key from **Linear Settings > API > Personal API keys**
