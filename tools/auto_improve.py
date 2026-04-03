@@ -373,6 +373,25 @@ def check_session_health():
         return False
 
 
+def check_runtime_tools():
+    """Verify runtime tool creation module is functional (724-office pattern)."""
+    try:
+        sys.path.insert(0, AGENT_DIR)
+        from tools.create_tool import check_governance_for_tool, list_available_tools
+        
+        # Test governance on safe code
+        safe_code = "def test(): return 'ok'\nregistry.register(name='test', toolset='test', schema={'description':'test'}, handler=lambda **k: 'ok')"
+        result = check_governance_for_tool('test', safe_code)
+        if result["safe"]:
+            log_improvement("runtime_tools", f"Governance checks working, {len(list_available_tools())} tools available")
+        else:
+            log_improvement("runtime_tools", f"WARNING: Governance flagged false positives: {result['issues']}", "fail")
+        return result["safe"]
+    except Exception as e:
+        log_improvement("runtime_tools", f"ERROR: {e}", "fail")
+        return False
+
+
 def check_memory_disk_usage():
     """Check memory file sizes and disk usage patterns (724-office pattern)."""
     try:
@@ -407,6 +426,7 @@ def main():
         ("Session Health", check_session_health),
         ("Memory File", check_memory_disk_usage),
         ("Skill Updates", update_skills_if_needed),
+        ("Runtime Tools", check_runtime_tools),
     ]
     
     results = {}
