@@ -305,6 +305,31 @@ def check_execution_analysis():
         log_improvement("execution_analysis", f"ERROR: {e}", "fail")
         return False
 
+
+def check_context_db():
+    """Check OpenViking-inspired context database health."""
+    try:
+        from tools.context_db import get_stats, add_context, inject_context
+        from tools.supermemory import get_stats as sm_stats, add_memory as sm_add
+        
+        stats = get_stats()
+        sm = sm_stats()
+        
+        log_improvement("context_db_check",
+                       f"Contexts: {stats['total_contexts']} ({stats['contradicted']} contradicted). "
+                       f"Supermemory: {sm['total_facts']} facts, {sm['profile_preferences']} prefs")
+        
+        # Inject test context
+        ctx = inject_context(max_chars=2000)
+        if ctx:
+            log_improvement("context_db_inject", f"Context injection: {len(ctx)} chars")
+            sm_add("Context DB health check completed", "session", "auto-improve")
+        
+        return True
+    except Exception as e:
+        log_improvement("context_db_check", f"ERROR: {e}", "fail")
+        return False
+
 def main():
     print("=" * 60)
     print(f"HERMES AUTO-IMPROVEMENT CYCLE")
@@ -317,6 +342,7 @@ def main():
         ("Vector Memory", check_vector_memory),
         ("Portkey Gateway", check_portkey),
         ("AutoHarness Analysis", check_autoharness),
+        ("Context DB", check_context_db),
         ("Skill Updates", update_skills_if_needed),
     ]
     
