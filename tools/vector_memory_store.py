@@ -36,11 +36,6 @@ logger = logging.getLogger(__name__)
 # ===========================================================================
 
 try:
-    from qdrant_client import QdrantClient; HAS_QDRANT = True
-except ImportError:
-    HAS_QDRANT = False
-
-try:
     import upstash_vector; HAS_UPSTASH = True
 except ImportError:
     HAS_UPSTASH = False
@@ -323,8 +318,6 @@ PROVIDER_FALLBACK = {
     "upstash":  ["upstash", "pinecone"],
     "neo4j":    ["neo4j", "pinecone"],
     "pinecone": ["pinecone"],
-    "qdrant":   ["pinecone"],
-    "zilliz":   ["pinecone"],
 }
 
 

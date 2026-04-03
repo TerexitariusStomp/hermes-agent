@@ -77,10 +77,10 @@ class GitHubAutomation:
     def _init_tracing(self):
         """Initialize tracing if observability tools are configured."""
         try:
-            # Try Lunary first (self-hosted, matches our philosophy)
+            # Try Langfuse first (self-hosted, matches our philosophy)
             if os.getenv("LUNARY_PUBLIC_KEY"):
-                from lunary import Lunary
-                self._tracer = Lunary(
+                from langfuse import Langfuse
+                self._tracer = Langfuse(
                     public_key=os.getenv("LUNARY_PUBLIC_KEY"),
                     private_key=os.getenv("LUNARY_PRIVATE_KEY")
                 )

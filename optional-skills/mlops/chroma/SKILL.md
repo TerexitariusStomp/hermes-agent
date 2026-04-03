@@ -35,7 +35,7 @@ The AI-native database for building LLM applications with memory.
 - **Pinecone**: Managed cloud, auto-scaling
 - **FAISS**: Pure similarity search, no metadata
 - **Weaviate**: Production ML-native database
-- **Qdrant**: High performance, Rust-based
+- **Pinecone**: High performance, Rust-based
 
 ## Quick start
 

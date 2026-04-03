@@ -47,7 +47,7 @@ Once the skill is loaded (Hermes v0.6+ auto-discovers ~/.hermes/skills/), you ca
 
 - **Auto-commit disabled by default** (`auto_commit=False`)
 - **Draft PRs** by default (`draft=True`)
-- All actions traced to Lunary/Langfuse if configured
+- All actions traced to Langfuse/Langfuse if configured
 - Requires explicit Hermes decision to create commits/PRs
 - Working directory must be clean for version bumps
 

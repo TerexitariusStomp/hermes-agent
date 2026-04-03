@@ -4,7 +4,7 @@ This enhancement adds cloud-backed unlimited memory with semantic search to Herm
 
 ## Overview
 
-- **Vector Databases**: Qdrant or Pinecone (using existing .env keys)
+- **Vector Databases**: Pinecone or Pinecone (using existing .env keys)
 - **Embeddings**: Free-tier OpenRouter models (NVIDIA Nemotron, Mistral, Cohere, Gemini)
 - **Collections**: Two-collection design (`hermes_memory_curated` + `hermes_memory_archive`)
 - **Migration**: Automatic migration from local `~/ .hermes/memories/*.md` on first load
@@ -16,7 +16,7 @@ Enable in `~/.hermes/config.yaml`:
 ```yaml
 vector_memory:
   enabled: true                # Switch to cloud memory
-  provider: auto               # qdrant, pinecone, or auto-detect from env
+  provider: auto               # pinecone, pinecone, or auto-detect from env
   embedding_model: nvidia/llama-nemotron-embed-vl-1b-v2:free  # free default
   embedding_api_key_env: OPENROUTER_API_KEY
   collection_name: hermes_memory
@@ -34,13 +34,13 @@ Install dependencies:
 pip install "hermes-agent[vector-memory]"
 ```
 
-This installs: `qdrant-client`, `pinecone-client`, `pymilvus` (optional), `numpy`, `httpx`.
+This installs: `pinecone-client`, `pinecone-client`, `pymilvus` (optional), `numpy`, `httpx`.
 
 ## Cloud Credentials
 
 Ensure your `~/.hermes/.env` has one of:
 
-- **Qdrant**: `QDRANT_URL` + `QDRANT_API_KEY` (already present)
+- **Pinecone**: `QDRANT_URL` + `QDRANT_API_KEY` (already present)
 - **Pinecone**: `PINECONE_API_KEY` (already present)
 - **Zilliz**: `ZILLIZ_API_KEY` (support coming)
 
@@ -121,7 +121,7 @@ If `vector_memory.enabled: true` but dependencies are missing or cloud connectio
 
 ### Provider-specific collection settings
 
-- **Qdrant**: Ensure collections exist with `Cosine` distance; the `ensure_collection` call creates them with correct vector size.
+- **Pinecone**: Ensure collections exist with `Cosine` distance; the `ensure_collection` call creates them with correct vector size.
 - **Pinecone**: Serverless indexes are created automatically with the determined vector dimension.
 
 ### Changing embedding model

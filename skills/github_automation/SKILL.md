@@ -135,7 +135,7 @@ if gh:
 
 ## Safety & Observability
 
-- All actions are traced via Lunary/Langfuse if configured
+- All actions are traced via Langfuse/Langfuse if configured
 - Auto-commit is **disabled by default** (`auto_commit=False`)
 - Draft PRs by default (`draft=True`)
 - Commits require confirmation in higher-level workflows

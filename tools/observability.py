@@ -2,17 +2,15 @@
 """
 Hermes Observability Gateway
 =============================
-Unified tracing for ALL LLM calls through Portkey → 5 cloud observability APIs.
+Unified tracing for LLM calls through Portkey → 3 cloud observability APIs.
 
 Architecture:
   Agent code
     └→ LLM call (via Portkey local proxy)
          ├→ Portkey headers (x-portkey-trace-id, x-portkey-provider)
-         ├→ Lunary          (HTTP POST to https://app.lunary.ai/api/v1/trace)
          ├→ Langfuse        (HTTP POST to https://us.cloud.langfuse.com)
          ├→ LangSmith       (HTTP POST to https://api.smith.langchain.com)
-         ├→ Opik            (HTTP POST to https://www.comet.com/api)
-         └→ W&B             (HTTP POST to https://api.wandb.ai)
+         └→ W&B             (HTTP POST to https://api.wandb.ai/graphql)
 
 NO SDK installations needed — all platforms use HTTP APIs directly.
 Only Portkey Gateway runs locally as the LLM routing proxy.
@@ -59,13 +57,6 @@ class ObservatoryConfig:
         return env
 
     @property
-    def lunary_public_key(self): return self.env.get("LUNARY_PUBLIC_KEY", "")
-    @property
-    def lunary_private_key(self): return self.env.get("LUNARY_PRIVATE_KEY", "")
-    @property
-    def lunary_enabled(self): return bool(self.lunary_public_key and self.lunary_private_key)
-
-    @property
     def langfuse_public_key(self): return self.env.get("LANGFUSE_PUBLIC_KEY", "")
     @property
     def langfuse_secret_key(self): return self.env.get("LANGFUSE_SECRET_KEY", "")
@@ -80,13 +71,6 @@ class ObservatoryConfig:
     def langsmith_project(self): return self.env.get("LANGSMITH_PROJECT", "hermes-agent")
     @property
     def langsmith_enabled(self): return bool(self.langsmith_api_key)
-
-    @property
-    def opik_api_key(self): return self.env.get("OPIK_API_KEY", "")
-    @property
-    def opik_project(self): return self.env.get("OPIK_PROJECT", "hermes-agent")
-    @property
-    def opik_enabled(self): return bool(self.opik_api_key)
 
     @property
     def wandb_api_key(self): return self.env.get("WANDB_API_KEY", "")
@@ -105,10 +89,8 @@ class ObservatoryConfig:
 
     def status(self) -> Dict[str, Any]:
         return {
-            "lunary":     {"enabled": self.lunary_enabled},
             "langfuse":   {"enabled": self.langfuse_enabled, "host": self.langfuse_host},
             "langsmith":  {"enabled": self.langsmith_enabled, "project": self.langsmith_project},
-            "opik":       {"enabled": self.opik_enabled, "project": self.opik_project},
             "wandb":      {"enabled": self.wandb_enabled, "project": self.wandb_project},
             "portkey":    {"enabled": self.portkey_enabled},
         }
@@ -129,46 +111,6 @@ def _http_post(url: str, headers: Dict, json_body: Dict, timeout: int = 10):
     except Exception as e:
         logger.debug("HTTP POST %s failed: %s", url.split("//")[1].split("/")[0], e)
         return None
-
-
-# ---------------------------------------------------------------------------
-# Lunary — HTTP POST to /api/v1/trace
-# ---------------------------------------------------------------------------
-
-def trace_lunary(call_id: str, messages: List[Dict], response: str,
-                  model: str, provider: str, usage: Dict, latency_ms: float,
-                  error: str = None):
-    if not _config.lunary_enabled:
-        return None
-    try:
-        payload = {
-            "type": "llm_call",
-            "callId": call_id,
-            "sessionId": _config.session_id or "hermes",
-            "input": messages,
-            "output": response,
-            "error": error,
-            "model": model,
-            "provider": provider,
-            "latency": latency_ms,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "usage": usage,
-        }
-        r = _http_post(
-            "https://app.lunary.ai/api/v1/trace",
-            headers={
-                "x-lunary-public-key": _config.lunary_public_key,
-                "x-lunary-private-key": _config.lunary_private_key,
-                "Content-Type": "application/json",
-            },
-            json_body=payload,
-        )
-        if r and r.status_code == 200:
-            logger.info("Lunary trace: OK (call_id=%s)", call_id[:12])
-            return r.json()
-    except Exception as e:
-        logger.debug("Lunary trace failed: %s", e)
-    return None
 
 
 # ---------------------------------------------------------------------------
@@ -226,76 +168,43 @@ def trace_langsmith(messages: List[Dict], response: str,
     try:
         run_id = str(uuid.uuid4())
         project = _config.langsmith_project
+        session_id_val = _config.session_id if _config.session_id else run_id
+        # LangSmith requires session_id to be a valid UUID32 format
         payload = {
             "id": run_id,
             "name": "llm_call",
             "run_type": "llm",
+            "project_name": project,
+            "session_key": session_id_val,
             "inputs": {"messages": messages},
             "outputs": {"response": response} if not error else None,
             "extra": {
+                "model": model,
+                "provider": provider,
                 "metadata": {
-                    "model": model,
-                    "provider": provider,
                     "usage": usage,
                     "latency_ms": round(latency_ms, 1),
-                }
+                },
             },
-            "error": error,
         }
+        if error:
+            payload["error"] = error
         r = _http_post(
-            f"https://api.smith.langchain.com/runs",
+            "https://api.smith.langchain.com/runs",
             headers={
                 "x-api-key": _config.langsmith_api_key,
                 "Content-Type": "application/json",
             },
             json_body=payload,
         )
-        if r and r.status_code in (200, 201):
-            logger.info("LangSmith run: OK (run_id=%s)", run_id[:12])
+        if r and r.status_code in (200, 201, 202):
+            logger.info("LangSmith run: %s (run_id=%s)", r.text[:80], run_id[:12])
             return run_id
+        else:
+            logger.debug("LangSmith trace failed: HTTP %s — %s",
+                         r.status_code if r else "N/A", r.text[:200] if r else "no response")
     except Exception as e:
         logger.debug("LangSmith trace failed: %s", e)
-    return None
-
-
-# ---------------------------------------------------------------------------
-# Opik — REST API (HTTP POST to /api/rest/v1/experiments)
-# ---------------------------------------------------------------------------
-
-def trace_opik(messages: List[Dict], response: str,
-                model: str, provider: str, usage: Dict, latency_ms: float,
-                error: str = None):
-    if not _config.opik_enabled:
-        return None
-    try:
-        project = _config.opik_project
-        trace_id = str(uuid.uuid4())
-        payload = {
-            "project_name": project,
-            "trace_id": trace_id,
-            "input": {"messages": messages},
-            "output": {"response": response} if not error else None,
-            "metadata": {
-                "model": model,
-                "provider": provider,
-                "usage": usage,
-                "latency_ms": round(latency_ms, 1),
-                "error": error,
-            },
-        }
-        r = _http_post(
-            "https://www.comet.com/api/rest/v1/experiments",
-            headers={
-                "Authorization": _config.opik_api_key,
-                "Content-Type": "application/json",
-            },
-            json_body=payload,
-        )
-        if r and r.status_code in (200, 201):
-            logger.info("Opik trace: OK (trace_id=%s)", trace_id[:12])
-            return trace_id
-    except Exception as e:
-        logger.debug("Opik trace failed: %s", e)
     return None
 
 
@@ -427,11 +336,9 @@ def trace_llm_call(name: str = None, tags: List[str] = None):
                 latency_ms = (time.monotonic() - start) * 1000
                 provider = "openrouter"  # default
                 
-                # Send to all platforms in parallel
-                trace_lunary(call_id, messages, response_text, model, provider, usage, latency_ms, error)
+                # Send to all platforms: Langfuse, LangSmith, W&B
                 trace_langfuse(call_id, messages, response_text, model, provider, usage, latency_ms, error)
                 trace_langsmith(messages, response_text, model, provider, usage, latency_ms, error)
-                trace_opik(messages, response_text, model, provider, usage, latency_ms, error)
                 trace_wandb(messages, response_text, model, provider, usage, latency_ms, error)
 
             return result
@@ -442,16 +349,10 @@ def trace_llm_call(name: str = None, tags: List[str] = None):
 def trace_llm_call_sync(messages, response_text, model, provider, usage, latency_ms, error=None):
     """Trace a completed LLM call to all platforms (non-decorator usage)."""
     call_id = str(uuid.uuid4())
-    trace_lunary(call_id, messages, response_text, model, provider, usage, latency_ms, error)
     trace_langfuse(call_id, messages, response_text, model, provider, usage, latency_ms, error)
     trace_langsmith(messages, response_text, model, provider, usage, latency_ms, error)
-    trace_opik(messages, response_text, model, provider, usage, latency_ms, error)
     trace_wandb(messages, response_text, model, provider, usage, latency_ms, error)
     return call_id
-
-
-# ===========================================================================
-# Portkey proxy headers builder
 # ===========================================================================
 
 def portkey_headers(provider: str = "openrouter", model: str = "") -> Dict[str, str]:
