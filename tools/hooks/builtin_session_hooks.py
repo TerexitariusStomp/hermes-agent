@@ -15,9 +15,9 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from .hook_types import HookContext, HookResult, HookManager
+from .hook_types import HookContext, HookResult
 from .hook_manager import HookManager as HM
-from . import session_persist
+from tools import session_persist
 
 logger = logging.getLogger(__name__)
 

@@ -16,7 +16,7 @@ import subprocess
 import re
 from typing import Optional
 
-from .hook_types import HookContext, HookResult, HookManager
+from .hook_types import HookContext, HookResult
 from .hook_manager import HookManager as HM
 
 logger = logging.getLogger(__name__)

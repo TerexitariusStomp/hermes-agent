@@ -152,6 +152,118 @@ check("AIAgent has _setup_hooks", hasattr(agent_cls, '_setup_hooks'))
 check("AIAgent has _fire_tool_before", hasattr(agent_cls, '_fire_tool_before'))
 check("AIAgent has _fire_tool_after", hasattr(agent_cls, '_fire_tool_after'))
 check("AIAgent has get_hook_manager", hasattr(agent_cls, 'get_hook_manager'))
+check("AIAgent has _fire_session_end_hook", hasattr(agent_cls, '_fire_session_end_hook'))
+
+# ── 11. Session persistence ──
+print("\n=== 11. Session persistence ===")
+from tools.session_persist import save_session, load_session, list_sessions, delete_session, build_resume_prompt
+
+test_sid = "test-hook-session-001"
+saved = save_session(
+    session_id=test_sid,
+    summary="Test session for hook integration",
+    current_task="Testing session persistence",
+    model_name="claude-sonnet-4-5",
+)
+check("Session saved", saved.exists())
+
+loaded = load_session(test_sid)
+check("Session loaded", loaded is not None)
+check("Schema version matches", (loaded or {}).get("schemaVersion") == "hermes.session.v1")
+
+prompt = build_resume_prompt(loaded or {})
+check("Resume prompt built", "RESUME FROM PREVIOUS SESSION" in prompt)
+check("Resume prompt has task context", "Testing session persistence" in prompt)
+
+all_sessions = list_sessions(limit=50)
+check("Session listed", any(s["id"] == test_sid for s in all_sessions))
+
+delete_session(test_sid)
+check("Session deleted", not (saved.exists() if hasattr(saved, 'exists') else True))
+check("Load deleted returns None", load_session(test_sid) is None)
+
+# ── 12. Continuous observation ──
+print("\n=== 12. Continuous observation ===")
+obs_ctx = HookContext(
+    agent_id="test",
+    tool_name="terminal",
+    tool_args={"command": "echo hello"},
+    tool_result="hello\n",
+    tool_duration=0.5,
+    turn_number=3,
+)
+from tools.hooks.builtin_continuous_observation import _log_observation
+_log_observation(obs_ctx)
+from tools.hooks.builtin_continuous_observation import get_observation_count
+count = get_observation_count()
+check(f"Observation logged (total: {count})", count > 0)
+
+# ── 13. Compact suggester ──
+print("\n=== 13. Compact suggester ===")
+mgr7 = HookManager()
+from tools.hooks.builtin_compact_suggester import register_compact_suggester, _tool_call_counters, COMPACT_THRESHOLD
+register_compact_suggester(mgr7)
+
+# Reset counter to known state for this agent
+cs_agent_id = "test-cs-isolated"
+if cs_agent_id in _tool_call_counters:
+    del _tool_call_counters[cs_agent_id]
+
+# Fire COMPACT_THRESHOLD - 1 calls (should not trigger hint)
+for i in range(COMPACT_THRESHOLD - 1):
+    loop.run_until_complete(mgr7.fire(HookPoint.TOOL_AFTER_EXECUTE, HookContext(agent_id=cs_agent_id)))
+assert _tool_call_counters[cs_agent_id] == COMPACT_THRESHOLD - 1
+
+results_49 = loop.run_until_complete(mgr7.fire(HookPoint.TOOL_AFTER_EXECUTE, HookContext(agent_id=cs_agent_id)))
+assert _tool_call_counters[cs_agent_id] == COMPACT_THRESHOLD
+check(f"Compact hint at {COMPACT_THRESHOLD}th call", any(
+    hasattr(r, 'reason') and r.reason and "compact" in r.reason.lower()
+    for r in results_49
+))
+
+# ── 14. Quality gates - terminal pre-check ──
+print("\n=== 14. Quality gates ===")
+mgr8 = HookManager()
+from tools.hooks.builtin_quality_gates import register_quality_gates
+register_quality_gates(mgr8)
+
+# Long-running command without background
+bg_ctx = HookContext(
+    agent_id="test",
+    tool_name="terminal",
+    tool_args={"command": "npm run dev"},
+)
+bg_results = loop.run_until_complete(mgr8.fire(HookPoint.TOOL_BEFORE_EXECUTE, bg_ctx))
+bg_warnings = [r for r in bg_results if r.severity == "warn" and "background" in (r.reason or "").lower()]
+check("Quality gate warns on background-less dev command", len(bg_warnings) > 0)
+
+# Normal command should not warn
+ok_ctx = HookContext(
+    agent_id="test",
+    tool_name="terminal",
+    tool_args={"command": "ls -la"},
+)
+ok_results = loop.run_until_complete(mgr8.fire(HookPoint.TOOL_BEFORE_EXECUTE, ok_ctx))
+no_bg_warns = all("background" not in (r.reason or "").lower() for r in ok_results)
+check("Quality gate does not warn on normal command", no_bg_warns)
+
+# ── 15. Token optimizer ──
+print("\n=== 15. Token optimizer ===")
+mgr9 = HookManager()
+from tools.hooks.builtin_token_optimizer import register_token_optimizer, get_token_stats, _agent_costs
+register_token_optimizer(mgr9)
+_agent_costs.clear()
+
+tok_ctx = HookContext(
+    agent_id="test-token",
+    model_name="claude-sonnet-4-5",
+    message_token_count=1500,
+    turn_number=1,
+)
+loop.run_until_complete(mgr9.fire(HookPoint.MODEL_AFTER_RESPONSE, tok_ctx))
+stats = get_token_stats()
+check("Token stats tracked", "test-token" in stats)
+check("Model usage recorded", stats.get("test-token", {}).get("model_usage", {}).get("claude-sonnet-4-5", 0) == 1)
 
 # ── Summary ──
 print(f"\n{'='*50}")

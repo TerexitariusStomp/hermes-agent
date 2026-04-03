@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from .hook_types import HookContext, HookManager
+from .hook_types import HookContext
 from .hook_manager import HookManager as HM
 
 logger = logging.getLogger(__name__)
