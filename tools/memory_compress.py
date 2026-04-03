@@ -24,9 +24,10 @@ MEMORY_FILE = os.path.join(MEMORY_DB_DIR, "compressed_memories.json")
 SIMILARITY_THRESHOLD = 0.92
 _memories = []
 _enabled = False
-_embedding_api_key = ""
+_embedding_api_key = ""  # Set via embedding_cfg["api_key_env"] in init()
 _embedding_base_url = ""
 _embedding_model = ""
+
 
 def init(config=None):
     global _enabled, _memories, _embedding_api_key, _embedding_base_url, _embedding_model
@@ -36,27 +37,30 @@ def init(config=None):
     if not _enabled:
         logger.info("[memory_compress] disabled")
         return
-    
+
     embedding_cfg = config.get("embedding_api", {})
-    _embedding_api_key = embedding_cfg.get("api_key", "")
+    api_key_env = embedding_cfg.get("api_key_env", "OPENROUTER_API_KEY")
+    _embedding_api_key = os.getenv(api_key_env, "")
     _embedding_base_url = embedding_cfg.get("api_base", "https://openrouter.ai/api/v1")
     _embedding_model = embedding_cfg.get("model", "nvidia/llama-nemotron-embed-vl-1b-v2:free")
-    
+
     if os.path.exists(MEMORY_FILE):
         try:
             with open(MEMORY_FILE) as f:
                 _memories = json.load(f)
             logger.info(f"[memory_compress] loaded {len(_memories)} memories")
-        except:
+        except Exception:
             _memories = []
+
 
 def _cosine_similarity(v1, v2):
     if not v1 or not v2:
         return 0.0
-    dot = sum(a*b for a,b in zip(v1, v2))
+    dot = sum(a*b for a, b in zip(v1, v2))
     n1 = sum(a*a for a in v1) ** 0.5
     n2 = sum(b*b for b in v2) ** 0.5
-    return dot / (n1*n2) if n1 and n2 else 0.0
+    return dot / (n1 * n2) if n1 and n2 else 0.0
+
 
 def _get_embedding(text):
     if not _embedding_api_key:
@@ -75,20 +79,21 @@ def _get_embedding(text):
         logger.debug(f"Embedding failed: {e}")
     return None
 
+
 def deduplicate_and_store(new_memories):
     if not _enabled or not new_memories:
         return {"added": 0, "skipped": 0}
-    
+
     added = 0
     skipped = 0
-    
+
     for mem in new_memories:
         vec = _get_embedding(mem.get("fact", ""))
         if not vec:
             _memories.append(mem)
             added += 1
             continue
-        
+
         is_dup = False
         for existing in _memories:
             if "embedding" not in existing:
@@ -98,26 +103,28 @@ def deduplicate_and_store(new_memories):
                 is_dup = True
                 skipped += 1
                 break
-        
+
         if not is_dup:
             mem["embedding"] = vec
             _memories.append(mem)
             added += 1
-    
+
     # Save without embeddings to keep file small
-    clean = [{k:v for k,v in m.items() if k != "embedding"} for m in _memories]
+    clean = [{k: v for k, v in m.items() if k != "embedding"} for m in _memories]
     with open(MEMORY_FILE, 'w') as f:
         json.dump(clean, f, indent=2)
-    
+
     return {"added": added, "skipped": skipped, "total": len(_memories)}
+
 
 def retrieve(query, top_k=5):
     if not _enabled or not _memories:
         return []
     vec = _get_embedding(query)
     if not vec:
-        return []
-    
+        fallback = _memories[:top_k]
+        return fallback
+
     scored = []
     for m in _memories:
         if "embedding" not in m:
@@ -126,12 +133,13 @@ def retrieve(query, top_k=5):
             sim = _cosine_similarity(vec, m["embedding"])
         if sim > 0.1:
             scored.append((sim, m))
-    
+
     scored.sort(key=lambda x: x[0], reverse=True)
     return [m for _, m in scored[:top_k]]
 
+
 # Auto-init
-init({"enabled": True, "embedding_api": {"api_base": "https://openrouter.ai/api/v1", "api_key_env": "OPENROUTER_API_KEY"}})
+init({"enabled": True, "embedding_api": {"api_key_env": "OPENROUTER_API_KEY"}})
 
 
 def _memory_compress_handler(args, task_id=None):
@@ -142,6 +150,8 @@ def _memory_compress_handler(args, task_id=None):
             facts = json.loads(facts)
         except json.JSONDecodeError:
             facts = [{"fact": facts}]
+    elif isinstance(facts, dict):
+        facts = [facts]
     return json.dumps(deduplicate_and_store(facts))
 
 

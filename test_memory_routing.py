@@ -14,7 +14,7 @@ print("=" * 55)
 print("  FULL END-TO-END ROUTING TEST")
 print("=" * 55)
 print("Active providers:", store.get_provider_info())
-print(f"Embedding: {type(store.embedding).__name__} - {store.embedding.get_vector_size()}d")
+print(f"Embedding: {type(store.embedding).__name__}")
 print()
 
 # STORE test for each route

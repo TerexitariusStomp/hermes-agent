@@ -1,103 +1,65 @@
-# HERMES_TOOL_IMPROVEMENTS.md -- Patterns from 724-Office
+# Hermes Tool Improvement Opportunities — 724-Office Pattern Analysis
 
-## Status as of 2026-04-03 (Cycle 2)
+Generated: 2026-04-03 19:38 UTC
+Source: 724-office integration cycles 1–4 analysis
 
-### ✅ COMPLETED (Cycle 1: 2026-04-03 04:48)
-- `tools/recall_tool.py` — semantic memory retrieval (line 806-813 of 724-office tools.py)
-- `tools/memory_compress.py` — LLM-based compression pipeline (memory.py 3-stage)
-- `tools/self_check_tool.py` — system health diagnostics (tools.py 818-920)
-- `tools/create_tool.py` — runtime tool creation (tools.py 1024-1055)
-- `vector-memory-routing` SKILL.md updated with 3-stage compression pattern
-- `auto_improve.py` enhanced with session health + memory file checks
+## Comparison Matrix: 724-Office vs Hermes
 
-### ✅ COMPLETED (Cycle 2: 2026-04-03 16:00)
-- `tools/diagnose_tool.py` — session file health diagnostics (tools.py 925-1019)
-  - Detects orphan tool messages, bad session starts, MCP status, error logs
-- `tools/self_check_tool.py` — registered via `registry.register()` (added handler)
-- `tools/create_tool.py` — registered 3 tools: `create_custom_tool`, `list_custom_tools`, `remove_custom_tool`
-- `tools/custom_tools/` — created directory + `__init__.py` for plugin hot-loading
-- `model_tools.py` — added imports for `self_check_tool`, `create_tool`, `memory_compress`, `diagnose_tool`
-  - Fixes orphaned module problem from Cycle 1 (modules existed but were never imported)
+The 724-office project reference (`/tmp/724-office/`) contained ~26 tool definitions across
+tools.py, memory.py, and llm.py. Hermes has already adapted the key patterns across prior
+integration cycles. This document tracks remaining gaps and future improvement opportunities.
 
-### 🔧 REMAINING (from 724-office)
+## Patterns Already Adapted
 
-## LOW Priority
+| 724-Office Pattern | Hermes Equivalent | Status |
+|---|---|---|
+| `self_check_tool.py` | `tools/self_check_tool.py` | ✅ Adapted (fix: schema mismatch, enhanced GPU parsing) |
+| `create_tool.py` | `tools/create_tool.py` | ✅ Adapted (governance checks, runtime registration) |
+| `memory_compress.py` | `tools/memory_compress.py` | ✅ Adapted (3-stage: compress→deduplicate→retrieve) |
+| `auto_improve.py` | `tools/auto_improve.py` | ✅ Adapted (9 check categories, hourly cycle) |
+| Session health checks | `state.db` queries | ✅ Adapted in auto_improve.py |
+| Plugin scanning | `plugins/` directory scan | ✅ Adapted in `collect_self_check_metrics()` |
 
-### 1. `self_check` -- System Self-Diagnostic
-**724-Office source**: `tool_self_check` (tools.py lines 818-920)
-**Pattern**: Collects session stats, error counts, service uptime, memory/disk, scheduled tasks, memory file status.
-**Adapt for Hermes**: Create a tool in `tools/self_check_tool.py` that:
-- Reads sessions from state.db (already collected by auto_improve.py)
-- Queries systemd/journalctl for error counts
-- Checks gateway service health
-- Reports MEMORY.md size and freshness
-- Returns consolidated health report
-**Estimated effort**: 2-3 hours
-**Integration**: Register via `registry.register()` in `tools/self_check_tool.py`
+## Missing Tool Patterns — Future Improvements
 
-### 2. `diagnose` -- Session File & MCP Health Diagnostic
-**724-Office source**: `tool_diagnose` (tools.py lines 925-1000)
-**Pattern**: Checks session files for JSON validity, orphan tool messages, starts-with-tool-message issues that cause LLM 400 errors.
-**Adapt for Hermes**: Create `tools/diagnose_tool.py` that:
-- Scans `~/.hermes/state.db` for session message integrity
-- Detects orphan tool messages (no matching tool_call_id)
-- Flags sessions starting with tool/assistant-with-tool_calls
-- Reports byte sizes and message counts per session
-**Estimated effort**: 1-2 hours
-**Integration**: Register via `registry.register()` in `tools/diagnose_tool.py`
+### 1. Rate Limit Tracking Tool (HIGH priority)
+- **724-Office Pattern**: Built-in rate limit detection per LLM provider with automatic backoff
+- **Hermes Gap**: Rate limits handled per-adapter but no unified tracking/exposure tool
+- **Adaptation**: Create `tools/rate_limit_tracker.py` that monitors OpenRouter/Portkey headers
+  and exposes a `rate_limit_status()` tool for agent visibility into remaining quota
+- **Effort**: Medium (2–3 hours)
 
-### 3. Three-Stage Memory Pipeline (compress -> deduplicate -> retrieve)
-**724-Office source**: memory.py (360 lines)
-**Pattern**:
-  1. Compress: LLM extracts structured facts (fact, keywords, persons, timestamp, topic) from evicted messages
-  2. Deduplicate: Cosine similarity > 0.92 threshold against existing memories, skip duplicates
-  3. Retrieve: Embed query, vector search, filter, return formatted text
-**Adapt for Hermes**: Current auto_improve does health checks but lacks LLM-based memory compression from evicted session messages. Add a background thread in `run_conversation()` that:
-- Detects when session messages are evicted (context window overflow)
-- Calls LLM to extract structured facts via COMPRESS_PROMPT
-- Deduplicates via cosine similarity
-- Stores in vector memory providers (Pinecone/Upstash)
-**Estimated effort**: 4-6 hours
-**Integration**: Add to `tools/vector_memory_store.py` or create `tools/memory_compressor.py`
+### 2. Context Window Budget Calculator (MEDIUM priority)
+- **724-Office Pattern**: `llm.py` session management includes token budget tracking per conversation
+- **Hermes Gap**: `context_compressor.py` handles overflow but no proactive budget calculator tool
+- **Adaptation**: Create `tools/context_budget.py` — agent can query `context_budget()` to see
+  remaining tokens, estimated messages before overflow, and compression trigger threshold
+- **Effort**: Low (1 hour)
 
-## MEDIUM Priority
+### 3. Tool Error Pattern Analyzer (HIGH priority)
+- **724-Office Pattern**: Error classification and pattern extraction from tool call failures
+- **Hermes Gap**: Dojo monitor tracks success rates but no real-time tool error pattern tool
+- **Adaptation**: Create `tools/error_pattern_analyzer.py` — analyzes recent failed tool calls,
+  groups by error type, suggests skill improvements. Integrates with Dojo monitor.py pipeline
+- **Effort**: Medium (3–4 hours)
 
-### 4. `recall` -- Semantic Memory Recall Tool
-**724-Office source**: `tool_recall` (tools.py lines 806-813)
-**Pattern**: Exposes memory retrieval as a tool callable by the LLM during conversations.
-**Adapt for Hermes**: Register memory retrieval as a callable tool so the agent can explicitly search its memory rather than only injecting context at session start.
-**Estimated effort**: 30 minutes
-**Integration**: Register via `registry.register()` wrapping `vector_memory_store.retrieve()`
+### 4. Memory Freshness Score (LOW priority)
+- **724-Office Pattern**: Session-key scoped memories with freshness timestamps
+- **Hermes Gap**: MEMORY.md has no structured freshness scoring
+- **Adaptation**: Add `_freshness_score(entry)` to `memory_offload.py` — entries older than
+  threshold get lower priority during offload/retrieval
+- **Effort**: Low (1 hour)
 
-### 5. `search_memory` -- Keyword Search in Memory
-**724-Office source**: `tool_search_memory` (tools.py lines 766-800)
-**Pattern**: grep-based keyword search in memory directory files.
-**Adapt for Hermes**: Add a keyword-based search tool for `~/.hermes/memories/` directory (MEMORY.md + daily logs).
-**Estimated effort**: 15 minutes
+### 5. Multi-Tool Batch Orchestrator (MEDIUM priority)
+- **724-Office Pattern**: Sequential tool orchestration with conditional branching
+- **Hermes Gap**: Agent makes sequential calls but no orchestrator pattern for complex pipelines
+- **Adaptation**: Create `tools/tool_orchestrator.py` — define a pipeline of tool calls where
+  output of one feeds into next, with failure handling and retry logic
+- **Effort**: High (5–6 hours)
 
-### 6. Context Cache for Zero-Latency Channels
-**724-Office source**: `get_cached_context(session_key)` in memory.py line 148
-**Pattern**: Pre-computed memory summary cached per session for hardware/voice channels.
-**Adapt for Hermes**: Useful for Telegram/WhatsApp gateway where latency matters. Cache the last memory injection result per session_key.
-**Estimated effort**: 30 minutes
+## Recommendations for Next Integration Cycle
 
-### 7. Plugin/Extension Directory Pattern
-**724-Office source**: `_load_plugins()` (tools.py lines 527-544)
-**Pattern**: Scans `plugins/` directory at startup, exec()'s .py files which use @tool decorator to register.
-**Adapt for Hermes**: Current `create_tool.py` already implements this. Could add auto-discovery of `~/.hermes/hermes-agent/tools/custom_tools/` at startup in `model_tools.py`.
-**Estimated effort**: 1 hour
-**Status**: create_tool.py already exists but not integrated into startup
-
-## LOW Priority
-
-### 8. Cross-Session Context Bridge
-**724-Office source**: `_get_recent_scheduler_context()` in llm.py lines 231-285
-**Pattern**: Extracts recent (2h) scheduled task output from scheduler session and injects into DM session system prompt.
-**Adapt for Hermes**: Useful for cross-gateway session continuity.
-**Estimated effort**: 1-2 hours
-
-### 9. Multi-Engine Search with Keyword Routing
-**724-Office source**: `tool_web_search` (tools.py lines 705-760)
-**Pattern**: Routes queries to specialized sources (Tavily for AI, GitHub for code, HF for models).
-**Adapt for Hermes**: Hermes already has `web_search` tool with Firecrawl and Parallel. Could extend with GitHub/HF routing.
-**Estimated effort**: 1 hour
+1. **Focus on Rate Limit Tracking** — Most actionable, addresses real quota management needs
+2. **Enhance memory_compress.py** — Fix the corrupted API key line (`_embedding_api_key=***`)
+3. **Add context_budget tool** — Quick win for agent self-awareness
+4. **Wire create_tool.py into toolsets.py** — Currently exists but may not be auto-discovered

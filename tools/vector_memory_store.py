@@ -457,8 +457,7 @@ class VectorMemoryStore:
             if preferred == "upstash":
                 payload["data"] = content
 
-            vecs = self.embedding.embed(target_dim, [content])
-            result = self.router.store(entry_type, [entry_id], vecs, [payload])
+            result = self.router.store(entry_type, [entry_id], [payload])
             if result:
                 return entry_id
         # Fallback: try all non-None providers
@@ -479,12 +478,11 @@ class VectorMemoryStore:
 
     def search(self, query: str, top_k: int = 10,
                target: Optional[str] = None) -> List[Dict]:
-        vec = self.embedding.embed_for(1536, [query])[0]
         filt = {"target": target} if target else None
         if self.router and target:
-            results = self.router.search(target, vec, filt, top_k)
+            results = self.router.search(target, query, filt, top_k)
         elif self.router:
-            results = self.router.search_all(vec, filt, top_k)
+            results = self.router.search_all(query, filt, top_k)
         else:
             results = []
         formatted = []
