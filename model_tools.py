@@ -152,6 +152,7 @@ def _discover_tools():
         "tools.memory_tool",
         "tools.semantic_memory_search",  # cloud vector memory search
         "tools.recall_tool",  # semantic recall from vector memory (724-office pattern)
+        "tools.diagnose_tool",  # session file & system diagnostics (724-office pattern)
         "tools.session_search_tool",
         "tools.clarify_tool",
         "tools.code_execution_tool",
@@ -160,6 +161,9 @@ def _discover_tools():
         "tools.send_message_tool",
         "tools.honcho_tools",
         "tools.homeassistant_tool",
+        "tools.self_check_tool",  # system self-check/health reporting (724-office pattern)
+        "tools.create_tool",  # runtime tool creation with governance (724-office pattern)
+        "tools.memory_compress",  # LLM-based memory compression pipeline (724-office pattern)
     ]
     import importlib
     for mod_name in _modules:
