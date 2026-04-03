@@ -5740,6 +5740,28 @@ class AIAgent:
         except Exception:
             logger.error("Error in after-execute hooks for '%s'", tool_name, exc_info=True)
 
+    def _fire_session_end_hook(self, completed: bool, interrupted: bool,
+                                final_response: str = "") -> None:
+        """Fire agent.afterStop with session summary at end of conversation."""
+        if not self._hook_manager:
+            return
+        ctx = HookContext(
+            agent_id=self._agent_id,
+            conversation_id=getattr(self, "session_id", None),
+            turn_number=0,
+            iteration_count=0,
+            model_name=getattr(self, "model", ""),
+            extras={
+                "completed": completed,
+                "interrupted": interrupted,
+                "final_response_preview": final_response[:200] if final_response else "",
+            },
+        )
+        try:
+            self._hook_manager.fire_sync(HookPoint.AGENT_AFTER_STOP, ctx)
+        except Exception:
+            logger.error("Error in after-stop hooks", exc_info=True)
+
     def _invoke_tool(self, function_name: str, function_args: dict, effective_task_id: str) -> str:
         """Invoke a single tool and return the result string. No display logic.
 
@@ -8672,6 +8694,13 @@ class AIAgent:
             )
         except Exception as exc:
             logger.warning("on_session_end hook failed: %s", exc)
+
+        # ── Lifecycle hooks: session auto-save at conversation end ─────
+        self._fire_session_end_hook(
+            completed=completed,
+            interrupted=interrupted,
+            final_response=final_response,
+        )
 
         return result
 
