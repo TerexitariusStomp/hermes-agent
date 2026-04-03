@@ -8695,7 +8695,15 @@ class AIAgent:
         except Exception as exc:
             logger.warning("on_session_end hook failed: %s", exc)
 
-        # ── Lifecycle hooks: session auto-save at conversation end ─────
+        # ── Lifecycle hooks: session auto-save at end of conversation ─────
+        try:
+            from tools.session_persist import save_session
+            save_session(
+                session_id=getattr(self, "session_id", None) or self._agent_id,
+                summary=(final_response or "")[:500],
+            )
+        except Exception:
+            logger.debug("Session persist failed", exc_info=True)
         self._fire_session_end_hook(
             completed=completed,
             interrupted=interrupted,
