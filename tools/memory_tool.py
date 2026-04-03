@@ -184,7 +184,12 @@ class MemoryStore:
         return self.memory_char_limit
 
     def add(self, target: str, content: str) -> Dict[str, Any]:
-        """Append a new entry. Returns error if it would exceed the char limit."""
+        """Append a new entry. Auto-offloads to Pinecone when near capacity.
+
+        If the file is > 70% full, triggers background offload to archived
+        vector memory (Pinecone) before checking capacity. If still too full
+        after offload, rejects the entry as before.
+        """
         content = content.strip()
         if not content:
             return {"success": False, "error": "Content cannot be empty."}
@@ -210,6 +215,31 @@ class MemoryStore:
             new_total = len(ENTRY_DELIMITER.join(new_entries))
 
             if new_total > limit:
+                # Attempt automatic offload before rejecting — ONLY when AT capacity
+                try:
+                    import sys, pathlib
+                    hermes_home = pathlib.Path.home() / ".hermes"
+                    if str(hermes_home / "hermes-agent") not in sys.path:
+                        sys.path.insert(0, str(hermes_home / "hermes-agent"))
+                    from tools.memory_offloader import auto_offload
+                    offload_result = auto_offload(target)
+                    if offload_result and offload_result.get("action") == "offloaded":
+                        # Retry after offload frees space
+                        self._reload_target(target)
+                        entries = self._entries_for(target)
+                        new_entries = entries + [content]
+                        new_total = len(ENTRY_DELIMITER.join(new_entries))
+                        if new_total <= limit:
+                            entries.append(content)
+                            self._set_entries(target, entries)
+                            self.save_to_disk(target)
+                            return self._success_response(
+                                target,
+                                f"Entry added (auto-offloaded {offload_result.get('entries_archived', 0)} old entries to Pinecone).",
+                            )
+                except (ImportError, Exception):
+                    pass
+
                 current = self._char_count(target)
                 return {
                     "success": False,
@@ -272,6 +302,33 @@ class MemoryStore:
             new_total = len(ENTRY_DELIMITER.join(test_entries))
 
             if new_total > limit:
+                # Attempt auto-offload before rejecting
+                try:
+                    import sys, pathlib
+                    hermes_home = pathlib.Path.home() / ".hermes"
+                    if str(hermes_home / "hermes-agent") not in sys.path:
+                        sys.path.insert(0, str(hermes_home / "hermes-agent"))
+                    from tools.memory_offloader import auto_offload
+                    offload_result = auto_offload(target)
+                    if offload_result and offload_result.get("action") == "offloaded":
+                        # Retry after offload
+                        self._reload_target(target)
+                        entries = self._entries_for(target)
+                        idx = [i for i, e in enumerate(entries) if old_text in e][0]
+                        test_entries = entries.copy()
+                        test_entries[idx] = new_content
+                        new_total = len(ENTRY_DELIMITER.join(test_entries))
+                        if new_total <= limit:
+                            entries[idx] = new_content
+                            self._set_entries(target, entries)
+                            self.save_to_disk(target)
+                            archived = offload_result.get("entries_archived", 0)
+                            return self._success_response(
+                                target,
+                                f"Entry replaced (auto-offloaded {archived} old entries to cloud).",
+                            )
+                except (ImportError, Exception):
+                    pass
                 return {
                     "success": False,
                     "error": (

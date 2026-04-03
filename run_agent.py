@@ -2575,6 +2575,43 @@ class AIAgent:
         except Exception as e:
             logger.debug("Vector memory archive failed (non-fatal): %s", e)
 
+        # After archiving, check if local MEMORY.md is over 70% capacity
+        # and auto-offload old entries to Pinecone
+        self._auto_offload_memory_if_needed()
+
+    def _auto_offload_memory_if_needed(self):
+        """Proactively offload local memory to Pinecone when nearing capacity.
+        
+        Runs after every conversation turn. If MEMORY.md exceeds 70% utilization,
+        archives old entries to Pinecone and prunes locally.
+        """
+        try:
+            hermes_home = os.environ.get("HERMES_HOME", os.path.expanduser("~/.hermes"))
+            sys.path.insert(0, os.path.join(hermes_home, "cloud"))
+            from memory_offload import offload_and_prune, MEMORY_CHAR_LIMIT, MEMORY_MD
+        except (ImportError, Exception):
+            return
+
+        if not MEMORY_MD.exists():
+            return
+
+        current_size = len(MEMORY_MD.read_text())
+        pct = current_size / MEMORY_CHAR_LIMIT
+
+        if pct > 0.70:
+            try:
+                result = offload_and_prune("memory")
+                if result.get("action") == "offloaded":
+                    archived = result.get("entries_archived", 0)
+                    old_pct = result.get("capacity_before_pct", 0)
+                    new_pct = result.get("capacity_after_pct", 0)
+                    logger.info(
+                        f"Auto-offload: {archived} entries archived to Pinecone "
+                        f"({old_pct}% → {new_pct}% capacity)"
+                    )
+            except Exception as e:
+                logger.debug(f"Auto-offload failed: {e}")
+
     def _honcho_sync(self, user_content: str, assistant_content: str) -> None:
         """Sync the user/assistant message pair to Honcho."""
         if not self._honcho or not self._honcho_session_key:
