@@ -142,7 +142,7 @@ def retrieve(query, top_k=5):
 init({"enabled": True, "embedding_api": {"api_key_env": "OPENROUTER_API_KEY"}})
 
 
-def _memory_compress_handler(args, task_id=None):
+def _memory_compress_handler(args, task_id=None, **kwargs):
     """Handler for the compress_memories LLM tool."""
     facts = args.get("facts", [])
     if isinstance(facts, str):
@@ -155,11 +155,14 @@ def _memory_compress_handler(args, task_id=None):
     return json.dumps(deduplicate_and_store(facts))
 
 
-def _memory_search_handler(args, task_id=None):
+def _memory_search_handler(args, task_id=None, **kwargs):
     """Handler for the search_compressed_memory LLM tool."""
     query = args.get("query", "")
     top_k = args.get("top_k", 5)
-    results = retrieve(query, top_k=top_k)
+    try:
+        results = retrieve(query, top_k=top_k)
+    except (TypeError, AttributeError) as e:
+        return json.dumps({"found": 0, "results": [], "error": str(e)})
     if not results:
         return json.dumps({"found": 0, "results": []})
     return json.dumps({"found": len(results), "results": results})
