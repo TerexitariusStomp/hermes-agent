@@ -43,9 +43,14 @@ nano-pdf edit report.pdf 3 "Update the date from January to February 2026"
 nano-pdf edit contract.pdf 2 "Change the client name from 'Acme Corp' to 'Acme Industries'"
 ```
 
+## Pitfalls
+
+- **Page numbering**: 0 or 1-based depending on version — retry with `page ± 1` if wrong page edited
+- **API key required**: Uses LLM under the hood — set `OPENAI_API_KEY` or configure via `nano-pdf --help`
+- **Layout corruption**: Complex formatting (tables, columns, images) may break. Reliable on text-only PDFs
+- **Silent partial failures**: Output file created even on partial edits — verify content matches expected changes
+
 ## Notes
 
-- Page numbers may be 0-based or 1-based depending on version — if the edit hits the wrong page, retry with ±1
-- Always verify the output PDF after editing (use `read_file` to check file size, or open it)
-- The tool uses an LLM under the hood — requires an API key (check `nano-pdf --help` for config)
-- Works well for text changes; complex layout modifications may need a different approach
+- Always verify the output PDF after editing
+- For large structural changes, consider alternative tools or manual editing
