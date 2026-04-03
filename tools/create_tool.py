@@ -26,6 +26,7 @@ import json
 import sys
 import time
 from datetime import datetime, timezone
+from tools.registry import registry
 
 AGENTS_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TOOLS_DIR = os.path.join(AGENTS_DIR, "tools")
