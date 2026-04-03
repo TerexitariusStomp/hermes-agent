@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import re
+from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -27,6 +28,252 @@ logger = logging.getLogger("hermes-self-improve")
 HERMES_HOME = os.path.expanduser("~/.hermes")
 SKILLS_DIR = os.path.join(HERMES_HOME, "skills")
 IMPROVEMENT_LOG = os.path.join(HERMES_HOME, "logs", "self_improve.jsonl")
+
+# ── Lane mapping: skill categories from desloppify strategy pattern ─────
+# Skills in different lanes can be improved in parallel without interference
+
+LANE_CATEGORIES: Dict[str, List[str]] = {
+    "core": ["lifecycle-hooks", "self-eval-criteria", "self-improvement-evolution",
+             "self-improvement-eval"],
+    "devops": ["operator-runbooks", "gateway-runbooks", "maintainer-triage",
+               "incident-response", "deployment-recipes", "desloppify-architecture"],
+    "research": ["miroshark-mirofish-integration", "arxiv", "polymarket"],
+    "mlops": ["mlops", "mlops-cloud", "axolotl", "grpo-rl-training", "peft",
+              "trl-fine-tuning", "vllm", "huggingface-hub", "aws-lambda-deploy",
+              "google-colab", "kaggle-compute", "modal", "render"],
+    "data": ["data-science", "jupyter-live-kernel", "docker-management",
+             "database-operations", "vector-memory-routing"],
+    "github": ["github", "github-auth", "github-pr-workflow", "github-code-review",
+               "github-issues", "github-repo-management", "subagent-driven-development",
+               "code-review", "systematic-debugging", "test-driven-development",
+               "unit-testing", "plan", "requesting-code-review", "writing-plans"],
+    "external": ["external-project-integration", "github-project-integration",
+                 "dogfood", "find-nearby", "hermes-system-improvement"],
+    "infra": ["api-integration", "webhook-subscriptions", "server-cleanup",
+              "nvidia-gpu-hotplug", "telegram-gateway-troubleshooting",
+              "hermes-dojo", "openspace-integration", "autoharness-integration",
+              "icarus-daedalus-integration", "observability-integration",
+              "llm-observability-tracing", "cloud-memory-architecture",
+              "cloud-orchestration", "free-llm-quality-routing", "memory-routing"],
+    "tools": ["cli-anything", "rag-anything", "mcporter", "native-mcp"],
+}
+
+# ── Improvement type classification (desloppify fixer leverage pattern)
+
+AUTO_FIXABLE_DIMENSIONS = {"pitfalls", "verification", "freshness"}
+HUMAN_JUDGMENT_DIMENSIONS = {"applicability", "actionability"}
+
+
+def _assign_lanes(scoring_results: List[Dict[str, Any]]) -> Dict[str, List[Dict]]:
+    """Group skills into parallel work lanes by category (desloppify lane pattern).
+
+    Skills in different lanes don't share content or dependencies,
+    so they can be improved simultaneously via delegate_task.
+    """
+    lanes: Dict[str, List[Dict]] = defaultdict(list)
+
+    for skill in scoring_results:
+        name = skill["skill_name"]
+        assigned = False
+        for lane_name, members in LANE_CATEGORIES.items():
+            if name in members:
+                lanes[lane_name].append(skill)
+                assigned = True
+                break
+        if not assigned:
+            lanes["misc"].append(skill)
+
+    # Sort each lane by priority (weakest first for targeted improvement)
+    for lane_name in lanes:
+        lanes[lane_name].sort(key=lambda s: s["overall"])
+
+    return dict(lanes)
+
+
+def _compute_lane_stats(lanes: Dict[str, List[Dict]]) -> Dict[str, Dict]:
+    """Compute statistics per lane for strategy hints."""
+    stats = {}
+    for lane_name, skills in lanes.items():
+        if not skills:
+            continue
+        avg = round(sum(s["overall"] for s in skills) / len(skills), 1)
+        weakest = min(s["overall"] for s in skills)
+        needs_work = sum(1 for s in skills if s["tier"] in ("C", "D", "F"))
+        file_count = len(skills)  # Each skill = one file to improve
+
+        stats[lane_name] = {
+            "skill_count": len(skills),
+            "average_score": avg,
+            "weakest_score": weakest,
+            "needs_improvement": needs_work,
+            "file_count": file_count,
+            "action_type": "auto" if avg < 55 else "mixed",
+        }
+    return stats
+
+
+def _detect_stagnant(stagnation_threshold: int = 3,
+                     min_score_change: float = 1.0) -> List[Dict[str, Any]]:
+    """Detect skills that haven't improved over multiple evaluation cycles.
+
+    Adapted from desloppify's _stagnant_dimensions pattern.
+    Looks at self_improve.jsonl history and flags skills whose
+    overall score hasn't changed by at least min_score_change
+    over the last stagnation_threshold cycles.
+    """
+    if not os.path.exists(IMPROVEMENT_LOG):
+        return []
+
+    entries = []
+    with open(IMPROVEMENT_LOG) as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                try:
+                    entries.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+
+    if len(entries) < stagnation_threshold:
+        return []
+
+    # Build per-skill score history
+    skill_history: Dict[str, List[float]] = defaultdict(list)
+    for entry in entries:
+        for skill in entry.get("scoring_results", []):
+            name = skill.get("skill_name")
+            if name:
+                skill_history[name].append(skill.get("overall", 0))
+
+    stagnant = []
+    all_names = list(skill_history.keys())
+
+    for name in all_names:
+        scores = skill_history[name]
+        if len(scores) < stagnation_threshold:
+            continue
+
+        last_n = scores[-stagnation_threshold:]
+        max_change = max(last_n) - min(last_n)
+
+        if max_change < min_score_change:
+            current = scores[-1]
+            if current < 100:  # Skip perfect scores
+                stagnant.append({
+                    "skill_name": name,
+                    "current_score": round(current, 1),
+                    "evaluations": len(scores),
+                    "max_change_during_window": round(max_change, 1),
+                    "recommendation": (
+                        f"Stagnant at ~{current:.0f} across {stagnation_threshold}+ cycles. "
+                        "Consider full rewrite instead of incremental fix."
+                        if current < 55
+                        else f"Consider targeted dimension overhaul at {current:.0f}."
+                    ),
+                })
+
+    stagnant.sort(key=lambda x: x["current_score"])
+    return stagnant
+
+
+def _detect_phase(avg_score: float, tier_dist: Dict[str, int]) -> str:
+    """Detect self-improvement maturity phase.
+
+    Adapted from desloppify's detect_phase pattern.
+    - foundation_building: Score < 60 average, many D/F skills
+    - refinement: Score 60-80 average, most skills C+
+    - polish: Score 80+ average, mostly B/A skills
+    """
+    low_count = tier_dist.get("D", 0) + tier_dist.get("F", 0)
+    high_count = tier_dist.get("A", 0) + tier_dist.get("B", 0)
+    total = sum(tier_dist.values())
+
+    if avg_score < 50 or low_count > total * 0.3:
+        return "foundation_building"
+    elif avg_score < 70 or low_count > total * 0.1:
+        return "refinement"
+    elif avg_score < 85:
+        return "polish"
+    else:
+        return "mature"
+
+
+def phase_strategy(phase: str) -> str:
+    """Return strategy hint based on current improvement phase."""
+    strategies = {
+        "foundation_building": (
+            "Focus on obvious gaps first: add pitfalls sections to skills that lack them, "
+            "add verification commands, and update stale documentation. "
+            "Prioritize Tier D skills — they'll show the biggest score improvement."
+        ),
+        "refinement": (
+            "Fill weak dimensions across skills. Target the weakest dimension per skill. "
+            "Add concrete examples and edge-case handling to boost actionability scores."
+        ),
+        "polish": (
+            "Incremental improvements: trim verbosity, cross-reference related skills, "
+            "add advanced patterns. Focus on skills with recent usage to maximize impact."
+        ),
+        "mature": (
+            "Maintain quality. Monitor for drift as tools/providers change. "
+            "Periodic re-evaluation and deprecation of superseded skills."
+        ),
+    }
+    return strategies.get(phase, strategies["refinement"])
+
+
+def _compute_fixer_leverage(recommendations: List[Dict]) -> Dict[str, Any]:
+    """Estimate what percentage of improvements are auto-fixable vs need human judgment.
+
+    Adapted from desloppify's FixerLeverage pattern.
+    Auto-fixable = dimension is in AUTO_FIXABLE_DIMENSIONS (pitfalls, verification, freshness)
+    Human judgment = dimension is in HUMAN_JUDGMENT_DIMENSIONS (applicability, actionability)
+    """
+    if not recommendations:
+        return {
+            "auto_fixable_count": 0, "total_count": 0,
+            "coverage": 0.0, "recommendation": "No skills need improvement.",
+        }
+
+    auto = 0
+    human = 0
+    for rec in recommendations:
+        weakest = rec.get("weakest_dimension", "")
+        if weakest in AUTO_FIXABLE_DIMENSIONS:
+            auto += 1
+        elif weakest in HUMAN_JUDGMENT_DIMENSIONS:
+            human += 1
+        else:
+            human += 1  # Default to human if unknown
+
+    total = auto + human
+    coverage = round(auto / total * 100, 1) if total > 0 else 0
+
+    if coverage > 70:
+        recommendation = (
+            f"{auto}/{total} improvements are routine (add pitfalls/verification/update). "
+            "These can be done quickly without deep analysis."
+        )
+    elif coverage > 40:
+        recommendation = (
+            f"Mix of routine fixes ({auto}) and structural changes ({human}). "
+            "Do routine fixes first for quick wins, then tackle the harder ones."
+        )
+    else:
+        recommendation = (
+            f"{human}/{total} improvements need structural changes "
+            "(rewriting triggers, adding concrete examples). "
+            "These require LLM-powered gradient estimation, not simple patches."
+        )
+
+    return {
+        "auto_fixable_count": auto,
+        "human_judgment_count": human,
+        "total_count": total,
+        "auto_fixable_percentage": coverage,
+        "recommendation": recommendation,
+    }
+
 
 WEIGHTS = {
     "applicability": 0.20,
@@ -377,13 +624,26 @@ def run_improvement_cycle(
         tiers[s["tier"]] += 1
     avg = sum(s["overall"] for s in results) / len(results) if results else 0
 
+    # ── Desloppify patterns ──────────────────────────────────────────
+    lanes = _assign_lanes(results)
+    lane_stats = _compute_lane_stats(lanes)
+    phase = _detect_phase(avg, tiers)
+    phase_hint = phase_strategy(phase)
+    fixer_leverage = _compute_fixer_leverage(recommendations)
+    stagnant = _detect_stagnant()
+
     result = {
         "status": "completed",
         "skills_scanned": len(results),
         "average_score": round(avg, 1),
         "tier_distribution": tiers,
+        "phase": phase,
+        "phase_hint": phase_hint,
         "scoring_results": results,
         "recommendations": recommendations,
+        "lanes": lane_stats,
+        "fixer_leverage": fixer_leverage,
+        "stagnant_skills": stagnant,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -392,6 +652,7 @@ def run_improvement_cycle(
         log = json.loads(json.dumps(result))
         for rec in log.get("recommendations", []):
             rec.pop("evaluation_prompt", None)
+        log.pop("lanes", None)  # Too verbose for log
         f.write(json.dumps(log, ensure_ascii=False) + "\n")
 
     return result
@@ -405,21 +666,55 @@ def format_summary(result: Dict[str, Any]) -> str:
         "## Self-Improvement Evaluation Summary", "",
         f"**Skills scanned:** {result['skills_scanned']}",
         f"**Average score:** {result['average_score']}/100",
+        f"**Phase:** {result.get('phase', 'unknown')} — {result.get('phase_hint', '')}",
         "**Tier distribution:**",
     ]
     for t, c in result["tier_distribution"].items():
         lines.append(f"  - Tier {t}: {c} skills")
+
+    # Lane summary
+    lanes = result.get("lanes", {})
+    if lanes:
+        lines.append("")
+        lines.append("**Work Lanes:**")
+        for lane, stats in sorted(lanes.items(), key=lambda x: x[1].get("weakest_score", 999)):
+            lines.append(
+                f"  - **{lane}**: {stats['skill_count']} skills, "
+                f"avg={stats['average_score']}, weakest={stats['weakest_score']}, "
+                f"needs work={stats['needs_improvement']}")
+
+    # Fixer leverage
+    fl = result.get("fixer_leverage", {})
+    if fl and fl.get("total_count", 0) > 0:
+        lines.append("")
+        lines.append(f"**Fixer Leverage:** {fl.get('auto_fixable_count', 0)} auto-fixable, "
+                     f"{fl.get('human_judgment_count', 0)} need judgment "
+                     f"({fl.get('auto_fixable_percentage', 0)}% routine)")
+        lines.append(f"  → {fl.get('recommendation', '')}")
+
+    # Stagnant skills
+    stagnant = result.get("stagnant_skills", [])
+    if stagnant:
+        lines.append("")
+        lines.append(f"**⚠️ {len(stagnant)} Stagnant Skills** (no improvement over 3+ cycles):")
+        for s in stagnant[:5]:
+            lines.append(f"  - **{s['skill_name']}**: stuck at {s['current_score']} "
+                         f"({s['evaluations']} evals, max Δ={s['max_change_during_window']})")
+            lines.append(f"    → {s['recommendation']}")
+
     recs = result.get("recommendations", [])
     if recs:
-        lines.append(f"\n**Top {len(recs)} improvements needed:**")
+        lines.append("")
+        lines.append(f"**Top {len(recs)} improvements needed:**")
         for i, r in enumerate(recs, 1):
             lines.append(
                 f"  {i}. **{r['skill_name']}** (score: {r['overall']}, tier: {r['tier']})")
             lines.append(
                 f"     Weakest: {r['weakest_dimension']} ({r['weakest_score']}/100)")
-            lines.append(f"     -> {r['recommendation']}")
+            lines.append(f"     → {r['recommendation']}")
     else:
-        lines.append("\nAll evaluated skills are Tier A or B.")
+        lines.append("")
+        lines.append("All evaluated skills are Tier A or B.")
     lines.append(f"\n**Full data:** {IMPROVEMENT_LOG}")
     return "\n".join(lines)
 
