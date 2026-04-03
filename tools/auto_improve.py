@@ -352,8 +352,9 @@ def check_session_health():
         c.execute("SELECT COUNT(*) FROM messages")
         msg_count = c.fetchone()[0]
         
-        # Check for sessions with errors (role not system/user/assistant/tool)
-        c.execute("SELECT COUNT(*) FROM messages WHERE role NOT IN ('system', 'user', 'assistant', 'tool')")
+        # Check for sessions with errors (role not system/user/assistant/tool/session_meta)
+        # Note: session_meta is used internally for session metadata entries
+        c.execute("SELECT COUNT(*) FROM messages WHERE role NOT IN ('system', 'user', 'assistant', 'tool', 'session_meta')")
         bad_role_count = c.fetchone()[0]
         
         # Check for orphan tool messages (simplified check)
@@ -455,6 +456,8 @@ def collect_self_check_metrics():
         "memory": {},
         "services": {},
         "error_logs": {},
+        "gpu": {},
+        "plugins": {},
     }
     
     # Session stats from state.db
@@ -478,9 +481,10 @@ def collect_self_check_metrics():
         parts = lines[1].split()
         metrics["memory"] = {"total_mb": parts[1], "used_mb": parts[2], "available_mb": parts[6] if len(parts) > 6 else parts[3]}
     
-    # Service health checks
+    # Service health checks (expanded from 724-office pattern)
     services = {
         "portkey_gateway": ["curl", "-s", "-m", "5", "-o", "/dev/null", "-w", "%{http_code}", "http://localhost:8787/"],
+        "openrouter": ["curl", "-s", "-m", "5", "-o", "/dev/null", "-w", "%{http_code}", "https://openrouter.ai/api/v1/models"],
     }
     for name, cmd in services.items():
         try:
@@ -488,6 +492,27 @@ def collect_self_check_metrics():
             metrics["services"][name] = f"HTTP {r.stdout.strip()}"
         except Exception as e:
             metrics["services"][name] = f"DOWN ({str(e)[:50]})"
+    
+    # GPU status (from 724-office pattern adapted for Hermes server)
+    try:
+        r = subprocess.run(["nvidia-smi", "--query-gpu=name,memory.used,memory.total",
+                           "--format=csv,noheader"], capture_output=True, text=True, timeout=5)
+        if r.returncode == 0 and r.stdout.strip():
+            metrics["gpu"] = {"detected": True, "gpus": r.stdout.strip()}
+        else:
+            metrics["gpu"] = {"detected": False, "reason": "nvidia-smi returned empty"}
+    except FileNotFoundError:
+        metrics["gpu"] = {"detected": False, "reason": "nvidia-smi not found"}
+    except Exception as e:
+        metrics["gpu"] = {"detected": False, "reason": str(e)[:100]}
+    
+    # Plugin scan (from 724-office plugin system pattern)
+    plugins_dir = os.path.join(os.path.expanduser("~/.hermes"), "plugins")
+    if os.path.isdir(plugins_dir):
+        plugin_files = [f for f in os.listdir(plugins_dir) if f.endswith(".py")]
+        metrics["plugins"] = {"dir": plugins_dir, "count": len(plugin_files), "files": plugin_files}
+    else:
+        metrics["plugins"] = {"dir": plugins_dir, "count": 0, "status": "plugins directory not created yet"}
     
     # Error log summary
     err_log = os.path.join(HOMEDIR, "logs/errors.log")
