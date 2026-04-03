@@ -12,6 +12,23 @@ metadata:
 
 # PDF & Document Extraction
 
+## When to Use
+
+**Trigger conditions** — use this skill when:
+- The user provides a PDF file path and asks to read, extract, summarize, or analyze it
+- The user shares a URL to a PDF (paper, report, form) and needs the content
+- The user has scanned documents, images of text, or image-heavy PDFs needing OCR
+- You need to merge, split, or search within existing PDF files
+- You encounter arXiv links in research contexts and need the full paper text
+
+**Do NOT use this skill when:**
+- The file is `.docx` — use `python-docx` instead (see Notes below)
+- The file is `.pptx` / `.key` / presentation — use the `powerpoint` skill
+- The file is an image (`.png`, `.jpg`) — use `vision_analyze` for single images, or marker-pdf for batch OCR of multiple images
+- The user wants to convert a PDF to a different format (e.g. PDF → DOCX) — use marker-pdf `--json` output as intermediate, then reconstruct; no direct converter is installed
+
+---
+
 For DOCX: use `python-docx` (parses actual document structure, far better than OCR).
 For PPTX: see the `powerpoint` skill (uses `python-pptx` with full slide/notes support).
 This skill covers **PDFs and scanned documents**.
@@ -157,6 +174,39 @@ for i, page in enumerate(doc):
 ```
 
 No extra dependencies needed — pymupdf covers split, merge, search, and text extraction in one package.
+
+---
+
+## HTML Conversion
+
+For converting HTML → Markdown (when `.html` isn't accepted by the target):
+
+```python
+# Simple string-splitting based HTML table → Markdown
+with open('input.html') as f:
+    html = f.read()
+
+# Split by <table> blocks
+for tbl in html.split('<table>')[1:]:
+    end = tbl.find('</table>')
+    if end == -1: continue
+    tbl = tbl[:end]
+    # Split by <tr>
+    for row in tbl.split('<tr>')[1:]:
+        tr_end = row.find('</tr>')
+        if tr_end == -1: continue
+        # Extract <td>...</td> and <th>...</th> cells via string search
+        # Clean: remove tags, handle <br>, <strong>, <em>, <span class="note">
+```
+
+**Key pitfalls:**
+- No `wkhtmltopdf`, `pandoc`, or `chromium` available on server — no PDF conversion possible without sudo
+- `pip3` not installed — can't install `beautifulsoup4` or `weasyprint`
+- **Regex-based `<tr>`/`<td>` extraction fails silently** on nested `<thead>`/`<tbody>` structures
+- **String `.split('<tr>')` and `.find('<td')` work reliably** where regex fails
+- For simple HTML with no tables: `.replace('<br>', '\n')`, `.replace('&amp;', '&')`, strip remaining `<...>` tags
+
+**When PDF is needed but tools aren't available:** convert to `.md` first, then suggest the user uses a local tool (browser Print→PDF, pandoc, etc.).
 
 ---
 

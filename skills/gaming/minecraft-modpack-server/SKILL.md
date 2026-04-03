@@ -170,6 +170,39 @@ Add hourly cron:
 ```
 
 ## Pitfalls
+
+### Known Failure Modes and Error Patterns
+
+**1. Server crashes on startup with `java.lang.OutOfMemoryError: Metaspace` or `Java heap space`**
+- **Cause**: Insufficient RAM allocation in `user_jvm_args.txt` for the mod count
+- **Fix**: Increase `-Xmx` — for 200+ mods use at least `-Xmx12G`. Also check no other processes are consuming RAM: `free -h`
+- **Workaround**: If hardware is limited, reduce mod count or use Aikar's flags for better GC pressure management
+
+**2. `java.net.BindException: Address already in use` on port 25565**
+- **Cause**: Another server instance is still running, or another service occupies the port
+- **Fix**: `sudo lsof -i :25565` to find the process, then `kill <PID>`. Change port if needed: `server-port=25566` in server.properties
+
+**3. Players get "Outdated server" or "Outdated client" on connect**
+- **Cause**: Client modpack version doesn't match the server pack version
+- **Fix**: Both client and server must use the EXACT same modpack version number. Check with `grep -r "version=" mods/` or ask user to confirm their client version
+
+**4. `net.neoforged.fml.loading.moddiscovery.InvalidModFileException` or similar mod loading errors**
+- **Cause**: Corrupted download during `startserver.sh` install, incompatible mod, or wrong mod loader version
+- **Fix**: Delete the `mods/` and `libraries/` directories, re-run the installer with `ATM10_INSTALL_ONLY=true bash startserver.sh`. Check `logs/latest.log` for the specific mod causing the conflict
+
+**5. Server watchdog kills the process: "A single server tick took X.XX seconds"**
+- **Cause**: Heavy mod interaction, worldgen lag spike, or insufficient `max-tick-time`
+- **Fix**: Set `max-tick-time=300000` (5 min) or `-1` (disable watchdog entirely). If recurring, check for known problem mods in the pack's issue tracker. Pre-generate world chunks with a chunk pregenerator mod to avoid worldgen stalls.
+
+**6. `eula.txt` not found or EULA not accepted error**
+- **Cause**: EULA file missing or `eula=false` (default from download)
+- **Fix**: Always run `echo "eula=true" > server/eula.txt` before first launch, even if the pack claims to auto-accept
+
+**7. JVM crashes with SIGSEGV or "A fatal error has been detected"**
+- **Cause**: Incompatible JDK version, or JVM flags not supported on this architecture
+- **Fix**: Match Java version to Minecraft version exactly (1.21+→Java 21, 1.18-1.20→Java 17, ≤1.16→Java 8). Remove aggressive G1GC flags and start with `-Xmx8G -XX:+UseG1GC` as a baseline.
+
+### General Pitfalls
 - ALWAYS set `allow-flight=true` for modded — mods with jetpacks/flight will kick players otherwise
 - `max-tick-time=180000` or higher — modded servers often have long ticks during worldgen
 - First startup is SLOW (several minutes for big packs) — don't panic
