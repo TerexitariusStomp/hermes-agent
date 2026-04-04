@@ -159,7 +159,7 @@ def _discover_tools():
         "tools.delegate_tool",
         "tools.process_registry",
         "tools.send_message_tool",
-        "tools.honcho_tools",
+        # "tools.honcho_tools",  # Removed — Honcho is now a memory provider plugin
         "tools.homeassistant_tool",
         "tools.self_check_tool",  # system self-check/health reporting (724-office pattern)
         "tools.create_tool",  # runtime tool creation with governance (724-office pattern)
@@ -377,8 +377,6 @@ def handle_function_call(
     task_id: Optional[str] = None,
     user_task: Optional[str] = None,
     enabled_tools: Optional[List[str]] = None,
-    honcho_manager: Optional[Any] = None,
-    honcho_session_key: Optional[str] = None,
 ) -> str:
     """
     Main function call dispatcher that routes calls to the tool registry.
@@ -423,16 +421,12 @@ def handle_function_call(
                 function_name, function_args,
                 task_id=task_id,
                 enabled_tools=sandbox_enabled,
-                honcho_manager=honcho_manager,
-                honcho_session_key=honcho_session_key,
             )
         else:
             result = registry.dispatch(
                 function_name, function_args,
                 task_id=task_id,
                 user_task=user_task,
-                honcho_manager=honcho_manager,
-                honcho_session_key=honcho_session_key,
             )
 
         try:
