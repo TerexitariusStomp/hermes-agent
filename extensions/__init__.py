@@ -1,0 +1,1 @@
+"""Hermes ecosystem extension wrappers for specialized external projects."""
